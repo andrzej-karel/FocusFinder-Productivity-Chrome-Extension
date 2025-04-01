@@ -1,0 +1,119 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>FocusFinder</title>
+    <link rel="stylesheet" href="../css/common.css">
+    <link rel="stylesheet" href="popup.css">
+</head>
+<body class="ff-root">
+    <header class="ff-popup-header">
+        <h1 class="ff-popup-title">FocusFinder</h1>
+        <div class="ff-header-controls">
+             <span class="ff-extension-status-indicator" title="Extension Status"></span>
+             <button id="ff-toggle-extension" class="ff-toggle-button" title="Toggle Extension On/Off">
+                <!-- SVG for power on/off will be added by JS -->
+            </button>
+        </div>
+    </header>
+
+    <nav class="ff-popup-nav">
+        <button class="ff-tab-button active" data-tab="websites">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>
+            Websites
+        </button>
+        <button class="ff-tab-button" data-tab="reasons">
+             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><line x1="10" y1="9" x2="8" y2="9"></line></svg>
+             Reasons
+        </button>
+        <button class="ff-tab-button" data-tab="settings">
+             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+             Settings
+        </button>
+    </nav>
+
+    <main class="ff-popup-main">
+        <!-- Websites Tab -->
+        <section id="tab-websites" class="ff-tab-content active">
+            <div class="ff-list-header">
+                <h3>Watched Websites</h3>
+                <button id="ff-add-website-btn" class="ff-button ff-button-add" title="Add Website">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                    Add
+                </button>
+            </div>
+            <div id="ff-websites-list" class="ff-item-list">
+                <!-- JS will populate this -->
+                <div class="ff-list-placeholder">Loading websites...</div>
+            </div>
+        </section>
+
+        <!-- Reasons Tab -->
+        <section id="tab-reasons" class="ff-tab-content">
+             <div class="ff-list-header">
+                <h3>Reasons</h3>
+                <button id="ff-add-reason-btn" class="ff-button ff-button-add" title="Add Reason">
+                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                    Add
+                </button>
+            </div>
+             <div id="ff-reasons-list" class="ff-item-list">
+                 <!-- JS will populate this -->
+                 <div class="ff-list-placeholder">Loading reasons...</div>
+             </div>
+        </section>
+
+        <!-- Settings Tab -->
+        <section id="tab-settings" class="ff-tab-content">
+             <h3>Settings</h3>
+             <div class="ff-setting-item">
+                <div>
+                    <label for="ff-pause-on-blur">Pause timer when switching to another window/tab</label>
+                    <label class="ff-switch">
+                        <input type="checkbox" id="ff-pause-on-blur">
+                        <span class="ff-slider"></span>
+                    </label>
+                </div>
+                <div class="ff-setting-description">Try switching off if you're having timer problems</div>
+            </div>
+             <!-- Add more settings here if needed -->
+             
+             <div class="ff-privacy-info">
+                <h4>Privacy Information</h4>
+                <ul>
+                    <li><span class="ff-checkmark">✓</span> All data is stored locally on your device only - we never transmit your data to any server</li>
+                    <li><span class="ff-checkmark">✓</span> The extension checks the time spent on monitored sites only during the current session</li>
+                    <li><span class="ff-checkmark">✓</span> The extension uses minimal permissions and all processing happens locally</li>
+                </ul>
+             </div>
+             
+             <div class="ff-version-info">Version: 1.1.5</div>
+        </section>
+    </main>
+
+    <footer class="ff-popup-footer">
+        <div class="ff-footer-left">FocusFinder: Browse For A Reason</div>
+        <div class="ff-footer-right">Helpful? Please rate us!</div>
+    </footer>
+
+     <!-- Modal Template (Generic) -->
+     <template id="ff-modal-template">
+         <div class="ff-modal-overlay">
+            <div class="ff-modal-content">
+                <h3 class="ff-modal-title">Modal Title</h3>
+                <div class="ff-modal-body">
+                    <!-- Content injected by JS -->
+                </div>
+                <div class="ff-modal-footer">
+                    <button class="ff-button ff-button-secondary ff-modal-cancel">Cancel</button>
+                    <button class="ff-button ff-button-primary ff-modal-confirm">Confirm</button>
+                </div>
+            </div>
+        </div>
+     </template>
+
+
+    <script src="../browser-polyfill.js"></script>
+    <script src="popup.js"></script>
+</body>
+</html>

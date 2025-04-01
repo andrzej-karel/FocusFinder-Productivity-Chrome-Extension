@@ -1,0 +1,546 @@
+﻿/* --- Intention Prompt --- */
+.ff-overlay {
+  position: fixed;
+  inset: 0;
+  background-color: rgba(0, 0, 0, 0.8);
+  z-index: 2147483647;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  font-family: var(--font-main);
+  backdrop-filter: blur(4px);
+  opacity: 1; /* Fully visible immediately */
+}
+
+.ff-dialog {
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 5px 20px var(--shadow-color);
+  width: 90%;
+  max-width: 460px;
+  overflow: hidden;
+  border: 1px solid var(--border-color);
+  opacity: 1;
+}
+
+.ff-dialog-header {
+  padding: 16px 24px;
+  font-size: 18px;
+  font-weight: 600;
+  border-bottom: 1px solid var(--border-color);
+  background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple), var(--accent-blue));
+  background-size: 200% 200%;
+  animation: gradient-shift 45s ease-in-out infinite;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  filter: var(--text-gradient-filter);
+}
+
+.ff-dialog-content {
+  padding: 24px;
+  max-height: 60vh;
+  overflow-y: auto;
+  background-color: var(--bg-primary);
+}
+
+.ff-dialog-footer {
+  padding: 16px 24px;
+  display: flex;
+  justify-content: space-between; /* Space out buttons */
+  gap: 12px;
+  border-top: 1px solid var(--border-color);
+  background-color: var(--bg-primary); /* Same as the footer button area */
+}
+
+/* Update close button style to match pause button */
+#ff-prompt-close {
+  flex: 1;
+  background-color: var(--bg-secondary);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-color);
+}
+#ff-prompt-close:hover {
+  color: var(--text-primary);
+  background-color: var(--bg-tertiary);
+  opacity: 1;
+}
+
+.ff-section {
+  margin-bottom: 20px;
+}
+
+.ff-label {
+  display: block;
+  font-size: 14px;
+  font-weight: 500;
+  margin-bottom: 10px;
+  color: var(--text-primary);
+}
+
+.ff-reason-buttons, .ff-time-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.ff-or-divider {
+  text-align: center;
+  margin: 8px 0;
+  font-size: 14px;
+  color: var(--text-secondary);
+  position: relative;
+}
+
+.ff-reason-button, .ff-time-button {
+  background-color: var(--bg-secondary);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-color);
+  flex-grow: 1; /* Allow buttons to take space */
+  transition: width 0.15s ease-out, color 0.15s ease-out, background-color 0.15s ease-out, border-color 0.15s ease-out;
+  min-width: 70px; /* Add min-width to ensure consistent button sizing */
+}
+
+.ff-reason-button:hover, .ff-time-button:hover {
+  border-color: var(--accent-blue);
+  color: var(--text-primary);
+  background-color: var(--bg-tertiary);
+}
+
+.ff-reason-button.selected, .ff-time-button.selected {
+  background-color: var(--bg-secondary);
+  color: var(--text-primary);
+  font-weight: 600;
+  position: relative;
+  border: none;
+  z-index: 1;
+  width: auto; /* Allow the width to adjust naturally when selected */
+}
+.ff-reason-button.selected::before, .ff-time-button.selected::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  padding: 1px; /* Creates a 1px gradient border */
+  border-radius: var(--radius-md);
+  background: var(--gradient-primary);
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  z-index: -1;
+}
+
+.ff-warning {
+  background-color: rgba(255, 98, 160, 0.1); /* Pinkish warning */
+  color: var(--accent-pink);
+  padding: 10px 14px;
+  border-radius: var(--radius-md);
+  font-size: 13px;
+  margin-top: 16px;
+  border: 1px solid rgba(255, 98, 160, 0.3);
+}
+.ff-warning span {
+   display: inline-block; /* Prevents weird wrapping */
+}
+
+/* --- Corner Widget --- */
+.ff-corner-widget {
+  width: auto; /* Start auto */
+  font-family: var(--font-main);
+  background-color: var(--bg-widget);
+  color: var(--text-primary);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 3px 10px var(--shadow-color);
+  border: 1px solid var(--border-color);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.ff-corner-widget.collapsed {
+  width: fit-content; /* Make width flexible based on content */
+  min-width: 60px; /* Reduced minimum width to 60px */
+  max-width: 360px;
+}
+
+.ff-corner-widget.expanded {
+  width: 320px;
+}
+
+.ff-widget-header {
+  padding: 10px 14px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  position: relative;
+  /* Removing transition */
+  border-bottom: 1px solid transparent;
+  gap: 12px; /* Increased gap for better symmetry */
+}
+
+.ff-corner-widget.collapsed .ff-title {
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--text-secondary);
+}
+
+.ff-widget-header-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.ff-widget-timer-condensed {
+  display: none !important; /* Hide timer in minimized view */
+}
+
+.ff-corner-widget.expanded .ff-widget-header {
+  border-bottom-color: var(--border-color);
+  padding: 12px 16px;
+}
+
+.ff-widget-title {
+  flex-grow: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-right: 8px;
+  background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple), var(--accent-blue));
+  background-size: 200% 200%;
+  animation: gradient-shift 45s ease-in-out infinite;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  filter: var(--text-gradient-filter);
+}
+
+/* Update gradient animation keyframes */
+@keyframes gradient-shift {
+  0% {
+    background-position: 0% 0%;
+    background-size: 200% 200%;
+  }
+  25% {
+    background-position: 100% 0%;
+    background-size: 250% 250%;
+  }
+  50% {
+    background-position: 100% 100%;
+    background-size: 200% 200%;
+  }
+  75% {
+    background-position: 0% 100%;
+    background-size: 250% 250%;
+  }
+  100% {
+    background-position: 0% 0%;
+    background-size: 200% 200%;
+  }
+}
+
+.ff-time-up-condensed {
+  color: var(--accent-pink) !important;
+  font-weight: 600;
+}
+
+.ff-widget-toggle-btn {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 2px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.ff-widget-toggle-btn:hover {
+  color: var(--text-primary);
+}
+
+.ff-widget-move-btn {
+  background: none;
+  border: 1px solid var(--text-secondary);
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 2px 6px;
+  font-size: 12px;
+  margin-right: 6px;
+  opacity: 0.7;
+  display: none !important; /* Force hide by default */
+  border-radius: var(--radius-sm);
+}
+
+.ff-corner-widget.expanded .ff-widget-move-btn {
+  display: block !important; /* Force show only in expanded view */
+}
+
+.ff-widget-move-btn:hover {
+  color: var(--text-primary);
+  border-color: var(--text-primary);
+  opacity: 1;
+}
+
+.ff-icon-expand, .ff-icon-collapse { display: none; }
+.ff-corner-widget.collapsed .ff-icon-expand { display: block; }
+.ff-corner-widget.expanded .ff-icon-collapse { display: block; }
+
+
+.ff-progress-bar-container {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  height: 3px;
+  background-color: rgba(74, 74, 142, 0.3); /* --border-color with alpha */
+}
+
+.ff-progress-bar {
+  height: 100%;
+  background: var(--gradient-primary);
+  width: 0%; /* Updated by JS */
+  /* Removing transition */
+}
+.ff-progress-bar-timeup {
+    background: var(--accent-pink) !important;
+}
+
+.ff-widget-content {
+  padding: 16px;
+  display: none;
+  flex-direction: column;
+  gap: 24px; /* Increased gap for better spacing between sections */
+}
+
+.ff-corner-widget.expanded .ff-widget-content {
+  display: flex;
+}
+
+.ff-intention-display {
+  font-size: 14px;
+  color: var(--text-secondary);
+  background-color: var(--bg-secondary);
+  padding: 12px; /* Consistent padding */
+  border-radius: var(--radius-md);
+  margin: 0; /* Remove any default margins */
+}
+.ff-intention-label {
+    font-weight: 600;
+    color: var(--text-secondary);
+}
+.ff-intention-text {
+    font-weight: 500;
+    color: var(--text-primary);
+    word-break: break-word;
+}
+
+
+.ff-timer-display {
+  font-size: 13px;
+  color: var(--text-secondary);
+  font-weight: 500;
+  margin: 8px 0; /* Add vertical margins for more space */
+  padding: 6px 0; /* Increased vertical padding */
+}
+.ff-timer-label {
+    margin-right: 4px;
+}
+.ff-timer-value {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+.ff-timer-limit {
+    color: var(--text-primary);
+}
+.ff-time-alert, .ff-timer-display.ff-time-alert .ff-timer-value {
+    color: var(--accent-pink) !important;
+    font-weight: 700;
+}
+
+
+.ff-pause-indicator, .ff-timeup-indicator {
+    display: none; /* Shown by JS */
+    font-size: 12px; /* Reduced font size */
+    font-style: italic;
+    padding: 3px 8px; /* Reduced vertical padding */
+    border-radius: var(--radius-sm);
+    text-align: center;
+    margin: 4px 0; /* Adjusted margins */
+}
+.ff-pause-indicator {
+    background-color: rgba(160, 160, 210, 0.15); /* --text-secondary alpha */
+    color: var(--text-secondary);
+    border: 1px solid rgba(160, 160, 210, 0.3);
+}
+.ff-timeup-indicator {
+    background-color: rgba(255, 98, 160, 0.15); /* --accent-pink alpha */
+    color: var(--accent-pink);
+    font-weight: 600;
+    border: 1px solid rgba(255, 98, 160, 0.4);
+}
+
+
+.ff-extend-section {
+    display: none; /* Shown when time is up */
+    margin-top: 6px; /* Reduced margin */
+    padding-top: 8px; /* Reduced padding */
+    border-top: 1px dashed var(--border-color);
+}
+.ff-extend-section label {
+    display: block;
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-bottom: 6px;
+    font-weight: 400;
+    opacity: 0.7;
+}
+.ff-extend-buttons {
+    display: flex;
+    gap: 8px;
+}
+.ff-button-extend {
+    flex: 1;
+    background-color: rgba(98, 255, 133, 0.15); /* --accent-green alpha */
+    color: var(--accent-green);
+    border: 1px solid rgba(98, 255, 133, 0.3);
+    font-weight: 600;
+    padding: 6px 10px;
+    font-size: 13px;
+}
+.ff-button-extend:hover {
+    background-color: rgba(98, 255, 133, 0.25);
+    border-color: rgba(98, 255, 133, 0.5);
+    opacity: 1;
+}
+
+
+.ff-widget-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-color);
+}
+
+.ff-button-pause-resume {
+    flex: 1;
+    background-color: var(--bg-tertiary);
+    color: var(--text-secondary);
+}
+.ff-button-pause-resume:hover {
+    color: var(--text-primary);
+}
+.ff-icon-pause, .ff-icon-resume { display: none; }
+.ff-corner-widget:not(.paused) .ff-icon-pause { display: inline-block; }
+.ff-corner-widget.paused .ff-icon-resume { display: inline-block; }
+
+.ff-button-move {
+    flex: 1;
+    background-color: var(--bg-tertiary);
+    color: var(--text-secondary);
+}
+.ff-button-move:hover {
+    color: var(--text-primary);
+}
+
+.ff-corner-widget .ff-button-close {
+    flex: 1.5; /* Make end session slightly larger */
+}
+
+/* Override default tooltip styling */
+.ff-corner-widget .ff-button-close[title]:hover::after {
+  content: attr(title);
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 6px 10px;
+  background-color: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: 12px;
+  white-space: nowrap;
+  border-radius: var(--radius-md);
+  box-shadow: 0 3px 6px var(--shadow-color);
+  border: 1px solid var(--border-color);
+  pointer-events: none;
+  z-index: 100;
+  margin-bottom: 8px;
+}
+
+/* Toast Notification */
+.ff-toast {
+  position: fixed;
+  bottom: 20px; /* Adjust if widget position changes */
+  left: 20px; /* Changed to left */
+  background-color: var(--bg-secondary);
+  color: var(--text-primary);
+  padding: 12px 18px;
+  border-radius: var(--radius-md);
+  font-size: 14px;
+  z-index: 2147483647;
+  font-family: var(--font-main);
+  box-shadow: 0 3px 10px var(--shadow-color);
+  border: 1px solid var(--border-color);
+  opacity: 0;
+  display: none; /* Hide by default with display instead of animation */
+  pointer-events: none;
+  max-width: 300px;
+}
+
+.ff-toast.show {
+  opacity: 1;
+  display: block; /* Show with display property */
+  pointer-events: auto;
+}
+
+.ff-input {
+  width: 100%;
+  padding: 10px 12px;
+  background-color: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  font-size: 14px;
+  font-family: var(--font-main);
+  transition: var(--transition-fast);
+}
+
+.ff-input::placeholder {
+  color: var(--text-secondary);
+}
+
+.ff-input:focus {
+  outline: none;
+  background-color: var(--bg-primary);
+  border: double 1px transparent;
+  background-image: linear-gradient(var(--bg-primary), var(--bg-primary)), var(--gradient-primary);
+  background-origin: border-box;
+  background-clip: padding-box, border-box;
+}
+
+/* Style for the Start Timer button */
+#ff-prompt-submit {
+  background: var(--gradient-primary);
+  color: var(--text-on-gradient);
+  font-weight: 600;
+}
+
+.ff-corner-widget.time-up {
+  animation: ff-wave 2s ease-in-out infinite;
+}
+
+@keyframes ff-wave {
+  0% {
+    box-shadow: 0 0 0 0 rgba(255, 98, 160, 0.4);
+  }
+  70% {
+    box-shadow: 0 0 0 10px rgba(255, 98, 160, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(255, 98, 160, 0);
+  }
+}
