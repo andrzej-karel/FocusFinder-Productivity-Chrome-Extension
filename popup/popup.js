@@ -1,7 +1,4 @@
-﻿﻿document.addEventListener('DOMContentLoaded', () => {
-  // Use the browser API consistently throughout the code
-  const browserAPI = typeof browser !== 'undefined' ? browser : chrome;
-
+﻿document.addEventListener('DOMContentLoaded', () => {
   // --- State ---
   let settings = {}; // To be loaded
 
@@ -23,6 +20,7 @@
     loadInitialData();
   }
 
+  // Sets up initial event listeners for tabs, buttons, and settings toggles
   function setupEventListeners() {
     // Tab switching
     tabButtons.forEach(button => {
@@ -42,12 +40,8 @@
 
   async function loadInitialData() {
     try {
-      settings = await browserAPI.runtime.sendMessage({ action: "getSettings" }).catch(err => {
-        console.error("Error in sendMessage:", err);
-        return {};
-      });
-      
-      if (!settings) { // Handle case where background script might not be ready
+      settings = await chrome.runtime.sendMessage({ action: "getSettings" });
+      if (!settings) { // Handle edge case where background script might not respond
         console.error("FocusFinder Popup: Failed to load settings.");
         settings = {}; // Use empty settings to avoid errors
         document.body.innerHTML = `<div style="padding: 20px; color: var(--accent-pink);">Error loading extension data. Please try reloading.</div>`;
@@ -64,7 +58,7 @@
       updateExtensionStatusUI(settings.isExtensionEnabled !== false); // Default to true if undefined
     } catch (error) {
       console.error("FocusFinder Popup: Error loading initial data:", error);
-      document.body.innerHTML = `<div style="padding: 20px; color: var(--accent-pink);">Error loading extension data. Please try reloading.</div>`;
+       document.body.innerHTML = `<div style="padding: 20px; color: var(--accent-pink);">Error loading extension data. Please try reloading.</div>`;
     }
   }
 
@@ -75,23 +69,23 @@
   }
 
   function renderWebsiteList() {
-    websitesListEl.innerHTML = ''; // Clear list
+    websitesListEl.innerHTML = '';
     if (!settings.watchlist || settings.watchlist.length === 0) {
         websitesListEl.innerHTML = `<div class="ff-list-placeholder">No websites added yet.</div>`;
         return;
     }
 
     settings.watchlist.forEach((domain) => {
-      const item = createListItem(domain, 'website', false); // isDefault = false for websites
+      const item = createListItem(domain, 'website');
       websitesListEl.appendChild(item);
     });
   }
 
   function renderReasonList() {
-    reasonsListEl.innerHTML = ''; // Clear list
+    reasonsListEl.innerHTML = '';
     
     // Combine both user reasons and default reasons in a single list
-    const allReasons = [...settings.userReasons, ...settings.defaultReasons];
+    const allReasons = [...(settings.userReasons || []), ...(settings.defaultReasons || [])];
     
     if (allReasons.length === 0) {
       reasonsListEl.innerHTML = `<div class="ff-list-placeholder">No reasons added yet.</div>`;
@@ -99,12 +93,13 @@
     }
     
     allReasons.forEach((reason) => {
-      const item = createListItem(reason, 'reason', false); // Treat all as non-default
+      const item = createListItem(reason, 'reason');
       reasonsListEl.appendChild(item);
     });
   }
 
-  function createListItem(text, type, isDefault = false) {
+  // Creates a DOM element for a list item (website or reason)
+  function createListItem(text, type) {
     const item = document.createElement('div');
     item.className = 'ff-list-item';
     item.dataset.value = text;
@@ -145,7 +140,7 @@
     return item;
   }
 
-
+  // Updates the state of UI controls in the Settings tab
   function updateSettingsUI() {
     // Update toggle states based on settings
     pauseOnBlurToggle.checked = settings.pauseOnBlur || false;
@@ -201,7 +196,7 @@
   async function handleSettingToggle(event) {
     const settingName = event.target.id.replace('ff-', '').replace(/-/g, '_'); // e.g., 'pause_on_blur'
     let keyName = settingName;
-    // Map setting names to their correct keys
+    // Map HTML element ID fragments to actual setting keys
     const settingMap = {
       'pause_on_blur': 'pauseOnBlur'
     };
@@ -214,28 +209,22 @@
   }
 
   async function handleGlobalEnableToggle() {
-    try {
-      const newState = !(settings.isExtensionEnabled !== false);
-      settings.isExtensionEnabled = newState;
-      updateExtensionStatusUI(newState);
-      // Send message to background script
+      const newState = !settings.isExtensionEnabled;
       try {
-        await browserAPI.runtime.sendMessage({ action: "toggleExtension", enable: newState });
-        console.log("FocusFinder Popup: Extension toggled to", newState);
-      } catch (err) {
-        console.error("Error in sendMessage:", err);
-        // Continue with UI update even if messaging fails
+          await chrome.runtime.sendMessage({ action: "toggleExtension", enable: newState });
+          // Update local state and UI immediately for responsiveness
+          settings.isExtensionEnabled = newState;
+          updateExtensionStatusUI(newState);
+      } catch (error) {
+           console.error("FocusFinder Popup: Error toggling extension:", error);
       }
-    } catch (error) {
-      console.error("FocusFinder Popup: Error toggling extension:", error);
-    }
   }
 
 
   function handleDeleteClick(type, value) {
     if (!confirm('Are you sure you want to delete "' + value + '"?')) return;
 
-    console.log('FocusFinder Popup: Deleting', value);
+    console.log('FocusFinder Popup: Deleting', type, ':', value);
     if (type === 'website') {
       settings.watchlist = settings.watchlist.filter(item => item !== value);
     } else if (type === 'reason') {
@@ -243,7 +232,10 @@
       settings.userReasons = settings.userReasons.filter(item => item !== value);
       settings.defaultReasons = settings.defaultReasons.filter(item => item !== value);
     }
-    saveSettingsAndUpdateBackground().then(renderAllLists);
+    saveSettingsAndUpdateBackground().then(() => {
+      if (type === 'website') renderWebsiteList();
+      else if (type === 'reason') renderReasonList();
+    });
   }
 
   async function handleModalConfirm(type, originalValue, newValue) {
@@ -336,17 +328,10 @@
         normalizeReason(reason) === normalizedNewValue
       );
       
-      // Check total reason count before adding
-      const totalReasons = (settings.userReasons?.length || 0) + (settings.defaultReasons?.length || 0);
-      if (totalReasons >= 10) {
-          alert("You can have a maximum of 10 reasons.");
-          return;
-      }
-
       if (!existsInUserReasons && !existsInDefaultReasons) {
         settings.userReasons.push(newValue);
-      } else {
-        alert("Reason already exists in the list (case-insensitive comparison).");
+      } else { 
+        alert("Reason already exists in the list (case-insensitive comparison)."); 
         return; 
       }
     } else if (type === 'edit-reason') {
@@ -482,15 +467,10 @@
   // --- Communication ---
   async function saveSettingsAndUpdateBackground() {
     try {
-      try {
-        await browserAPI.runtime.sendMessage({ action: "updateSettings", newSettings: settings });
-        console.log("FocusFinder Popup: Settings updated in background:", settings);
-      } catch (err) {
-        console.error("Error in sendMessage:", err);
-        // Continue with local updates even if messaging fails
-      }
+        await chrome.runtime.sendMessage({ action: "updateSettings", newSettings: settings });
+        console.log("FocusFinder Popup: Sent updated settings to background.");
     } catch (error) {
-      console.error("FocusFinder Popup: Error updating settings:", error);
+        console.error("FocusFinder Popup: Error sending settings update to background:", error);
     }
   }
 

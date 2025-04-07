@@ -1,7 +1,7 @@
 ﻿/* Inherits variables from common.css */
 
 body {
-  width: 390px; /* Fixed width for popup */
+  width: 400px; /* Fixed width for popup */
   min-height: 450px; /* Min height */
   max-height: 600px; /* Max height */
   display: flex;

@@ -18,7 +18,7 @@
   border-radius: var(--radius-lg);
   box-shadow: 0 5px 20px var(--shadow-color);
   width: 90%;
-  max-width: 460px;
+  max-width: 450px; /* Reduced width */
   overflow: hidden;
   border: 1px solid var(--border-color);
   opacity: 1;
@@ -88,7 +88,7 @@
 
 .ff-or-divider {
   text-align: center;
-  margin: 8px 0;
+  margin: 16px 0; /* Increased vertical margin */
   font-size: 14px;
   color: var(--text-secondary);
   position: relative;
@@ -99,8 +99,6 @@
   color: var(--text-secondary);
   border: 1px solid var(--border-color);
   flex-grow: 1; /* Allow buttons to take space */
-  transition: width 0.15s ease-out, color 0.15s ease-out, background-color 0.15s ease-out, border-color 0.15s ease-out;
-  min-width: 70px; /* Add min-width to ensure consistent button sizing */
 }
 
 .ff-reason-button:hover, .ff-time-button:hover {
@@ -116,7 +114,6 @@
   position: relative;
   border: none;
   z-index: 1;
-  width: auto; /* Allow the width to adjust naturally when selected */
 }
 .ff-reason-button.selected::before, .ff-time-button.selected::before {
   content: "";
@@ -146,7 +143,10 @@
 
 /* --- Corner Widget --- */
 .ff-corner-widget {
-  width: auto; /* Start auto */
+  position: absolute !important; /* Position absolutely within the fixed host */
+  transition: top 0.3s ease, right 0.3s ease, bottom 0.3s ease, left 0.3s ease !important; /* Transition position */
+  width: auto; 
+  z-index: 1; /* z-index relative to host */
   font-family: var(--font-main);
   background-color: var(--bg-widget);
   color: var(--text-primary);
@@ -156,6 +156,7 @@
   overflow: hidden;
   display: flex;
   flex-direction: column;
+  pointer-events: auto !important; /* Make sure it's interactive */
 }
 
 .ff-corner-widget.collapsed {
@@ -262,27 +263,35 @@
   color: var(--text-primary);
 }
 
+/* Enhanced Move Button styles */
 .ff-widget-move-btn {
   background: none;
   border: 1px solid var(--text-secondary);
   color: var(--text-secondary);
-  cursor: pointer;
-  padding: 2px 6px;
+  cursor: pointer !important; /* Ensure cursor shows it's clickable */
+  padding: 2px 8px;
   font-size: 12px;
   margin-right: 6px;
-  opacity: 0.7;
-  display: none !important; /* Force hide by default */
+  opacity: 0.8;
+  display: none;
   border-radius: var(--radius-sm);
+  transition: var(--transition-fast);
+  position: relative; /* Ensure it's positioned properly */
+  z-index: 2; /* Higher z-index to ensure it's above other elements */
+  min-width: 40px; /* Ensure minimum size for better clickability */
+  min-height: 24px;
+  pointer-events: auto !important; /* Ensure click events work */
 }
 
 .ff-corner-widget.expanded .ff-widget-move-btn {
-  display: block !important; /* Force show only in expanded view */
+  display: inline-block !important; /* Use inline-block instead of block */
 }
 
 .ff-widget-move-btn:hover {
   color: var(--text-primary);
   border-color: var(--text-primary);
   opacity: 1;
+  background-color: rgba(255, 255, 255, 0.05); /* Slight highlight on hover */
 }
 
 .ff-icon-expand, .ff-icon-collapse { display: none; }
@@ -392,11 +401,9 @@
 }
 .ff-extend-section label {
     display: block;
-    font-size: 12px;
+    font-size: 12px; /* Reduced font size */
     color: var(--text-secondary);
-    margin-bottom: 6px;
-    font-weight: 400;
-    opacity: 0.7;
+    margin-bottom: 6px; /* Reduced margin */
 }
 .ff-extend-buttons {
     display: flex;
@@ -438,37 +445,8 @@
 .ff-corner-widget:not(.paused) .ff-icon-pause { display: inline-block; }
 .ff-corner-widget.paused .ff-icon-resume { display: inline-block; }
 
-.ff-button-move {
-    flex: 1;
-    background-color: var(--bg-tertiary);
-    color: var(--text-secondary);
-}
-.ff-button-move:hover {
-    color: var(--text-primary);
-}
-
 .ff-corner-widget .ff-button-close {
     flex: 1.5; /* Make end session slightly larger */
-}
-
-/* Override default tooltip styling */
-.ff-corner-widget .ff-button-close[title]:hover::after {
-  content: attr(title);
-  position: absolute;
-  bottom: 100%;
-  left: 50%;
-  transform: translateX(-50%);
-  padding: 6px 10px;
-  background-color: var(--bg-secondary);
-  color: var(--text-primary);
-  font-size: 12px;
-  white-space: nowrap;
-  border-radius: var(--radius-md);
-  box-shadow: 0 3px 6px var(--shadow-color);
-  border: 1px solid var(--border-color);
-  pointer-events: none;
-  z-index: 100;
-  margin-bottom: 8px;
 }
 
 /* Toast Notification */
@@ -529,18 +507,10 @@
   font-weight: 600;
 }
 
-.ff-corner-widget.time-up {
-  animation: ff-wave 2s ease-in-out infinite;
-}
-
-@keyframes ff-wave {
-  0% {
-    box-shadow: 0 0 0 0 rgba(255, 98, 160, 0.4);
-  }
-  70% {
-    box-shadow: 0 0 0 10px rgba(255, 98, 160, 0);
-  }
-  100% {
-    box-shadow: 0 0 0 0 rgba(255, 98, 160, 0);
-  }
-}
+/* Optional: Add classes for positioning if needed, but inline styles might be sufficient now */
+/* 
+.ff-corner-widget.ff-pos-inner-bottom-right { ... }
+.ff-corner-widget.ff-pos-inner-bottom-left { ... }
+.ff-corner-widget.ff-pos-inner-top-left { ... }
+.ff-corner-widget.ff-pos-inner-top-right { ... }
+*/

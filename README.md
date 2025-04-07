@@ -9,11 +9,11 @@ The extension follows Chrome's Manifest V3 architecture for enhanced security an
 ### Core Files
 - `manifest.json`: Extension configuration and permissions
 - `background.js`: Service worker for timer management and state tracking
-- `contentScript.js`: UI components and page-level functionality
-- `popup/`: Extension popup interface
-- `icons/`: Extension icons in various sizes
-- `css/`: Styling and fonts
-- `sounds/`: Audio feedback files
+- `contentScript.js`: Injects UI components (intention prompt, timer widget) and handles page-level interactions.
+- `popup/`: Contains the HTML, CSS, and JS for the extension's popup window (settings, watched sites, reasons).
+- `icons/`: Extension icons used in the browser UI and store listing.
+- `css/`: Contains shared styles (`common.css`), component-specific styles, and fonts.
+- `sounds/`: Audio feedback files (e.g., for timer completion).
 
 ### Required Permissions
 The extension requires the following permissions for core functionality:
@@ -29,12 +29,13 @@ The extension requires the following permissions for core functionality:
 2. **Timer Widget**: A non-intrusive corner widget showing time spent on sites together with your chosen goal, serving as a gentle reminder of your intended purpose
 3. **Website Management**: Easy addition and management of monitored websites through an intuitive interface, allowing you to customize which sites to track
 4. **Smart Auto-Pause**: Automatically pauses time tracking when switching to another window or tab, ensuring accurate time monitoring of active browsing sessions
+5. **Customizable Reasons**: Define your own common reasons for visiting sites to quickly select them in the intention prompt.
+6. **Extend Confirmation**: Prevents accidental excessive time extension by asking for confirmation on the second attempt to extend the timer.
 
 ### Code Documentation
-- `background.js`: Core service worker managing timers, state, and settings
-- `contentScript.js`: Handles UI elements and user interactions
-- `browserDetection.js`: Ensures cross-browser compatibility
-- `browser-polyfill.js`: Standardizes browser APIs
+- `background.js`: The core service worker. Manages timers, domain state (intention, time spent, paused status), settings persistence (using `chrome.storage.local`), and communication between tabs and the popup.
+- `contentScript.js`: Runs on specified web pages. Creates the Shadow DOM elements for the intention prompt and the corner widget, injects CSS, handles user interactions within these elements, and communicates with the background script.
+- `popup/popup.js`: Logic for the extension popup window. Handles displaying and managing watched websites, custom reasons, and settings (like pause-on-blur). Communicates with the background script to get/set data.
 
 ### Privacy & Security
 - All data is stored locally on the user's device
@@ -43,4 +44,4 @@ The extension requires the following permissions for core functionality:
 - Follows Manifest V3 best practices
 
 ### Lincense
- FocusFinder © 2025 by Andrzej Karel is licensed under Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International 
+FocusFinder © 2024 by Andrzej Karel is licensed under Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International 

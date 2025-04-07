@@ -1,23 +1,10 @@
-﻿﻿// FocusFinder - Content Script (Shadow DOM Version)
-// This script runs in the context of each webpage and manages:
-// - User interface elements (timer widget, intention prompts) within Shadow DOM
-// - Communication with the background service worker
-// - Page visibility tracking
-// - Timer display and updates
-// - User interactions with the extension UI
-
-(() => {
-  // Use the browser API consistently throughout the code
-  const browserAPI = typeof browser !== 'undefined' ? browser : chrome;
-
-  // Prevent multiple instances of the content script from running
-  if (window.focusFinderContentScriptLoaded) {
-    console.log("FocusFinder Content Script: Already loaded, skipping execution.");
-    return; // Exit early
-  }
+﻿// Check if script already ran before any declarations
+if (window.focusFinderContentScriptLoaded) {
+  console.log("FocusFinder Content Script: Already loaded, skipping execution.");
+} else {
   window.focusFinderContentScriptLoaded = true;
 
-  // --- Utilities ---
+  // --- Utilities (defined first to avoid reference errors) ---
   function extractDomain(url) {
     try {
       if (!url || typeof url !== 'string' || url.startsWith('chrome:') || url.startsWith('about:') || url.startsWith('file:')) return "";
@@ -47,24 +34,29 @@
   let currentDomain = extractDomain(window.location.href);
   let promptHost = null; // Host element for the intention prompt
   let widgetHost = null; // Host element for the timer widget
+  let toastHost = null; // Host element for the toast message
   let confirmationHost = null; // Host element for the extend confirmation
   let promptShadowRoot = null;
   let widgetShadowRoot = null;
-  let confirmationShadowRoot = null;
-  let currentReasons = []; // Store the latest reasons list
-  let widgetState = {
-    intention: '', timeSpent: 0, reminderTime: 300, isPaused: false,
-    isTimeUp: false, expanded: false, pauseReason: '', position: 'bottom-right',
-    hasExtended: false
+  let toastShadowRoot = null;
+  let widgetState = { // Local cache of state
+    intention: '',
+    timeSpent: 0,
+    reminderTime: 300,
+    isPaused: false,
+    isTimeUp: false,
+    expanded: false, // Start collapsed
+    pauseReason: '',
+    position: 'bottom-right' // Add position state, default to bottom-right
   };
   let combinedCSS = ''; // To store combined CSS for injection
 
   // --- CSS Preparation ---
   async function prepareCSS() {
     try {
-      const fontsCSSUrl = browserAPI.runtime.getURL('css/fonts.css');
-      const commonCSSUrl = browserAPI.runtime.getURL('css/common.css');
-      const contentScriptCSSUrl = browserAPI.runtime.getURL('css/contentScript.css');
+      const fontsCSSUrl = chrome.runtime.getURL('css/fonts.css');
+      const commonCSSUrl = chrome.runtime.getURL('css/common.css');
+      const contentScriptCSSUrl = chrome.runtime.getURL('css/contentScript.css');
 
       const [fontsRes, commonRes, contentScriptRes] = await Promise.all([
         fetch(fontsCSSUrl),
@@ -80,12 +72,12 @@
       let commonCSS = await commonRes.text();
       let contentScriptCSS = await contentScriptRes.text();
 
-      // Process font URLs
+      // Process font URLs using chrome.runtime.getURL
       fontsCSS = fontsCSS.replace(/url\('\.\/fonts\/(.*?)'\)/g, (match, fontFile) => {
-        return `url('${browserAPI.runtime.getURL(`css/fonts/${fontFile}`)}')`;
+        return `url('${chrome.runtime.getURL(`css/fonts/${fontFile}`)}')`;
       });
 
-      // Remove @import from common.css
+      // Remove @import from common.css as fontsCSS is prepended
       commonCSS = commonCSS.replace(/@import url\('\.\/fonts\.css'\);/g, '');
 
       // Combine CSS
@@ -113,6 +105,7 @@
     }
   }
 
+
   // --- Initialization ---
   async function init() {
     console.log("FocusFinder Content Script: Initializing (Shadow DOM) on", currentDomain);
@@ -121,51 +114,43 @@
     addVisibilityListener();
 
     // Check initial state with background script
-    browserAPI.runtime.sendMessage({ action: "getDomainState", domain: currentDomain })
-      .then(state => {
-        if (state && state.intentionSet) {
-          widgetState = { ...widgetState, ...state };
-          if (!widgetHost) {
-            createCornerWidget(currentDomain, widgetState);
-          } else {
-            updateCornerWidget(widgetState);
-          }
+    chrome.runtime.sendMessage({ action: "getDomainState", domain: currentDomain }, (state) => {
+      if (chrome.runtime.lastError) {
+        console.error("FocusFinder Content Script: Error getting initial state:", chrome.runtime.lastError.message);
+        return;
+      }
+      console.log("FocusFinder Content Script: Received initial state", state);
+      if (state && state.intentionSet) {
+        widgetState = { ...widgetState, ...state }; // Update local cache
+        if (!widgetHost) { // Use widgetHost to check existence
+          createCornerWidget(currentDomain, widgetState);
+        } else {
+          updateCornerWidget(widgetState);
         }
-      })
-      .catch(error => {
-        console.error("FocusFinder Content Script: Error getting initial state:", error);
-      });
+      }
+    });
   }
 
   function addMessageListener() {
-    browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       console.log("FocusFinder Content Script: Received message:", message);
       switch (message.action) {
         case "ping":
           sendResponse({ status: "ready" });
           break;
-        case "settingsUpdated": // Handle settings updates from background
+        case "settingsUpdated":
           console.log("FocusFinder Content Script: Received updated settings");
-          if (message.newSettings) {
-            currentReasons = [...(message.newSettings.defaultReasons || []), ...(message.newSettings.userReasons || [])];
-            // If prompt is currently shown, update it (optional, might be complex)
-            // if (promptHost) {
-            //   removeIntentionPrompt();
-            //   createIntentionPrompt(currentDomain, currentReasons);
-            // }
-          }
           sendResponse({ success: true });
           break;
         case "showIntentionPrompt":
-          if (promptHost) removeIntentionPrompt();
-          currentReasons = message.reasons || []; // Update reasons from message
-          createIntentionPrompt(message.domain, currentReasons); // Use the received reasons
+          if (promptHost) removeIntentionPrompt(); // Use promptHost to check
+          createIntentionPrompt(message.domain, message.reasons || []);
           sendResponse({ success: true, showingPrompt: true });
           break;
         case "initializeWidget":
-          if (promptHost) removeIntentionPrompt();
-          widgetState = { ...widgetState, ...message.state };
-          if (!widgetHost) {
+          if (promptHost) removeIntentionPrompt(); // Use promptHost
+          widgetState = { ...widgetState, ...message.state }; // Update cache
+          if (!widgetHost) { // Use widgetHost
              createCornerWidget(message.domain, widgetState);
           } else {
               updateCornerWidget(widgetState);
@@ -179,8 +164,8 @@
              widgetState.isPaused = false;
              widgetState.isTimeUp = false;
              widgetState.pauseReason = '';
-             if (promptHost) removeIntentionPrompt();
-             if (!widgetHost) {
+             if (promptHost) removeIntentionPrompt(); // Use promptHost
+             if (!widgetHost) { // Use widgetHost
                  createCornerWidget(currentDomain, widgetState);
              } else {
                   updateCornerWidget(widgetState);
@@ -196,13 +181,15 @@
           sendResponse({ success: true });
           break;
         case "showReminder":
-           widgetState.isTimeUp = true;
-           widgetState.timeSpent = message.timeSpent;
+           widgetState.isTimeUp = true; // Mark as time up
+           widgetState.timeSpent = message.timeSpent; // Sync time
            updateCornerWidget(widgetState);
+           // Ensure widget is expanded and visible when reminder hits
            if (!widgetState.expanded) {
-               toggleWidgetExpansion(true);
+               toggleWidgetExpansion(true); // Force expand
            }
            highlightWidget();
+           // Play sound if indicated
            if (message.shouldPlaySound) {
              playTimerCompletionSound();
            }
@@ -215,6 +202,7 @@
           sendResponse({ success: true });
           break;
         case "timerResumed":
+          if (confirmationHost) removeExtendConfirmation(); // Close confirmation if resuming
           widgetState.isPaused = false;
           widgetState.pauseReason = '';
           updateCornerWidget(widgetState);
@@ -222,18 +210,23 @@
           break;
          case "timerExtended":
              widgetState.reminderTime = message.newReminderTime;
-             widgetState.isTimeUp = false;
-             widgetState.isPaused = false;
+             widgetState.isTimeUp = false; // Reset time up flag
+             widgetState.isPaused = false; // Ensure timer is running
              widgetState.pauseReason = '';
-             updateCornerWidget(widgetState);
+             updateCornerWidget(widgetState); // Update display with new time
              showToast(`Time extended by ${message.extensionMinutes} minutes`);
              sendResponse({ success: true });
              break;
+        case "showExtendConfirmation":
+            console.log("FocusFinder Content Script: Received request to show extend confirmation");
+            showExtendConfirmation(currentDomain, message.minutes);
+            sendResponse({ success: true });
+            break;
         default:
           console.log("FocusFinder Content Script: Unknown action", message.action);
           sendResponse({ error: "Unknown action" });
       }
-      return true; // Keep channel open for async responses
+      return true; // Keep channel open for async responses if needed
     });
   }
 
@@ -243,28 +236,35 @@
 
   // --- UI Management (Shadow DOM) ---
 
-  // Updated to accept a combined list of reasons
+  // Removed old injectCSS function
+
   function createIntentionPrompt(domain, reasons = []) {
     if (promptHost) return; // Already exists
 
     promptHost = document.createElement('div');
     promptHost.id = 'ff-prompt-host';
+    // Basic styling for host to ensure it's positioned correctly
+    promptHost.style.position = 'fixed';
+    promptHost.style.top = '0';
+    promptHost.style.left = '0';
+    promptHost.style.width = '100%';
+    promptHost.style.height = '100%';
+    promptHost.style.zIndex = '2147483647'; // Max z-index
     document.body.appendChild(promptHost);
 
     promptShadowRoot = promptHost.attachShadow({ mode: 'open' });
-    injectStyles(promptShadowRoot);
+    injectStyles(promptShadowRoot); // Inject combined CSS
 
     const promptElement = document.createElement('div'); // The actual UI container
     promptElement.className = 'ff-overlay ff-root'; // Apply root class for variables
 
-    // Use the passed 'reasons' array
     let reasonButtonsHTML = reasons.map(reason =>
-      `<button class="ff-button ff-reason-button">${reason}</button>`
+      `<button class="ff-button ff-reason-button" data-reason="${reason}">${reason}</button>`
     ).join('');
 
     // Add placeholder if no reasons exist
     if (reasons.length === 0) {
-        reasonButtonsHTML = `<div class="ff-list-placeholder">No reasons configured. Add some in the extension settings.</div>`;
+        reasonButtonsHTML = `<div class="ff-list-placeholder">No default reasons configured.</div>`;
     }
 
     promptElement.innerHTML = `
@@ -278,14 +278,14 @@
             <div class="ff-reason-buttons">
               ${reasonButtonsHTML}
             </div>
-            <div class="ff-or-divider">or</div>
-            <input type="text" id="ff-custom-reason" class="ff-input" placeholder="Type your own reason..." maxlength="100">
-          </div>
+            <!-- Add 'or' divider if there are default reasons -->
+            ${reasons.length > 0 ? '<div class="ff-or-divider">or</div>' : ''}
+            <input type="text" id="ff-custom-reason" class="ff-input ff-input-intention" placeholder="type your reason here"></div>
           <div class="ff-section">
             <label class="ff-label">How long do you need?</label>
             <div class="ff-time-buttons">
               <button class="ff-button ff-time-button" data-duration="60">1 min</button>
-              <button class="ff-button ff-time-button selected" data-duration="180">3 min</button>
+              <button class="ff-button ff-time-button selected" data-duration="180">3 min</button> <!-- Default selected -->
               <button class="ff-button ff-time-button" data-duration="300">5 min</button>
               <button class="ff-button ff-time-button" data-duration="600">10 min</button>
               <button class="ff-button ff-time-button" data-duration="900">15 min</button>
@@ -312,29 +312,33 @@
 
     // --- Event Listeners for Prompt (within Shadow DOM) ---
     let selectedReason = '';
-    let selectedDuration = 180;
+    let selectedDuration = 180; // Default 3 minutes
 
+    // Query within the shadow root
     const reasonButtons = promptShadowRoot.querySelectorAll('.ff-reason-button');
     const customReasonInput = promptShadowRoot.querySelector('#ff-custom-reason');
 
-    customReasonInput.focus(); // Focus input
+    // Focus on the custom reason input field immediately
+    customReasonInput.focus();
 
     reasonButtons.forEach(btn => {
       btn.addEventListener('click', () => {
         reasonButtons.forEach(b => b.classList.remove('selected'));
         btn.classList.add('selected');
-        selectedReason = btn.textContent;
-        customReasonInput.value = '';
+        selectedReason = btn.dataset.reason;
+        customReasonInput.value = ''; // Clear custom input
       });
     });
 
     customReasonInput.addEventListener('input', () => {
       reasonButtons.forEach(b => b.classList.remove('selected'));
-      selectedReason = '';
+      selectedReason = ''; // Clear pre-selected reason
     });
 
+    // Add event listener for Enter key on custom reason input
     customReasonInput.addEventListener('keyup', (e) => {
       if (e.key === 'Enter') {
+        // Simulate click on continue button when Enter is pressed
         const continueButton = promptShadowRoot.querySelector('#ff-prompt-continue');
         if (continueButton) continueButton.click();
       }
@@ -352,8 +356,9 @@
     promptShadowRoot.querySelector('#ff-prompt-continue').addEventListener('click', () => {
       const finalReason = customReasonInput.value.trim() || selectedReason;
       if (!finalReason) {
+        // Maybe show a small validation message?
         customReasonInput.focus();
-        customReasonInput.style.borderColor = 'var(--accent-pink)';
+        customReasonInput.style.borderColor = 'var(--accent-pink)'; // Highlight error
         setTimeout(()=> customReasonInput.style.borderColor = '', 2000);
         return;
       }
@@ -362,16 +367,21 @@
 
     promptShadowRoot.querySelector('#ff-prompt-close').addEventListener('click', handlePromptCloseTabs);
 
+     // Prevent clicking outside the dialog from closing it (optional)
      promptElement.addEventListener('click', (e) => {
-         if (e.target === promptElement) { /* Only if click is on the overlay itself */ }
+         // Check if the click target is the overlay itself (the container within the shadow DOM)
+         if (e.target === promptElement) {
+             // Clicked on overlay background, could close or do nothing
+             // removeIntentionPrompt(); // Example: close on outside click
+         }
      });
   }
 
   function removeIntentionPrompt() {
     if (promptHost) {
-      promptHost.remove();
+      promptHost.remove(); // Remove the host element from the document
       promptHost = null;
-      promptShadowRoot = null;
+      promptShadowRoot = null; // Clear references
     }
   }
 
@@ -380,32 +390,47 @@
 
     widgetHost = document.createElement('div');
     widgetHost.id = 'ff-widget-host';
-    // Initial position styles applied to host
+    // Style the host as a full non-interactive overlay
     widgetHost.style.position = 'fixed';
-    widgetHost.style.zIndex = '2147483646';
-    widgetHost.style.opacity = '0'; // Start invisible
-    widgetHost.style.transition = 'all 0.3s ease'; // Add smooth transition for movement
+    widgetHost.style.top = '0';
+    widgetHost.style.left = '0';
+    widgetHost.style.width = '100vw'; // Use viewport units
+    widgetHost.style.height = '100vh';// Use viewport units
+    widgetHost.style.zIndex = '2147483647'; // Max z-index
+    widgetHost.style.pointerEvents = 'none'; // Make host non-interactive
+    // widgetHost.style.border = '1px dashed rgba(255,0,0,0.2)'; // REMOVE DEBUG BORDER
+
+    // Get initial position from state or use default
+    const initialPosition = initialState.position || 'bottom-right';
+    
     document.body.appendChild(widgetHost);
-
+    
+    // Shadow DOM setup remains the same
     widgetShadowRoot = widgetHost.attachShadow({ mode: 'open' });
-    injectStyles(widgetShadowRoot);
+    injectStyles(widgetShadowRoot); // Inject combined CSS
 
-    const widgetElement = document.createElement('div');
-    widgetElement.className = 'ff-corner-widget ff-root collapsed';
+    const widgetElement = document.createElement('div'); // The actual UI container
+    widgetElement.className = 'ff-corner-widget ff-root collapsed'; // Apply root class
+    widgetElement.style.pointerEvents = 'auto'; // Make widget interactive
+
+    // Apply initial position *to the inner widget element*
+    positionWidgetElement(widgetElement, initialPosition);
+
+    // Inner HTML structure (keep as is)
     widgetElement.innerHTML = `
       <div class="ff-widget-header">
-         <div class="ff-header">
-             <div class="ff-expand-arrow"></div>
-             <div class="ff-title">FocusFinder</div>
-         </div>
+        <div class="ff-header">
+           <div class="ff-expand-arrow"></div>
+           <div class="ff-title">FocusFinder</div>
+        </div>
          <div class="ff-widget-header-controls">
-             <span class="ff-widget-timer-condensed"></span>
-             <button class="ff-widget-move-btn" title="Change widget position">Move</button>
-             <button class="ff-widget-toggle-btn" title="Toggle widget size">
-                 <svg class="ff-icon-expand" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6"></path><path d="M9 21H3v-6"></path><path d="M21 3l-7 7"></path><path d="M3 21l7-7"></path></svg>
-                 <svg class="ff-icon-collapse" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14h6v6"></path><path d="M20 10h-6V4"></path><path d="M14 10l7-7"></path><path d="M3 21l7-7"></path></svg>
-             </button>
-         </div>
+           <span class="ff-widget-timer-condensed"></span>
+           <button class="ff-widget-move-btn" title="Change widget position">Move</button>
+           <button class="ff-widget-toggle-btn" title="Toggle widget size">
+               <svg class="ff-icon-expand" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6"></path><path d="M9 21H3v-6"></path><path d="M21 3l-7 7"></path><path d="M3 21l7-7"></path></svg>
+               <svg class="ff-icon-collapse" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14h6v6"></path><path d="M20 10h-6V4"></path><path d="M14 10l7-7"></path><path d="M3 21l7-7"></path></svg>
+           </button>
+        </div>
          <div class="ff-progress-bar-container">
              <div class="ff-progress-bar"></div>
          </div>
@@ -423,6 +448,7 @@
            <div class="ff-pause-indicator">Paused</div>
            <div class="ff-timeup-indicator">Time's Up!</div>
           <div class="ff-extend-section">
+             <!-- Label changed slightly to match backup -->
              <label>I need more time:</label>
              <div class="ff-extend-buttons">
                 <button class="ff-button ff-button-extend" data-extend-minutes="1">+1m</button>
@@ -431,12 +457,12 @@
              </div>
           </div>
           <div class="ff-widget-actions">
-            <button class="ff-button ff-button-pause-resume">
-               <svg class="ff-icon-pause" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>
-               <svg class="ff-icon-resume" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+            <button class="ff-button ff-button-pause-resume" title="Pause tracking">
+               <svg class="ff-icon-pause" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>
+               <svg class="ff-icon-resume" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
                <span>Pause</span>
             </button>
-            <button class="ff-button ff-button-close" title="Close all tabs">
+            <button class="ff-button ff-button-close" title="Close all ${domain} tabs">
                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
                End Session
             </button>
@@ -447,296 +473,380 @@
 
     widgetShadowRoot.appendChild(widgetElement);
 
-    // Apply initial state
-    widgetState = { ...widgetState, ...initialState };
-    updateCornerWidget(widgetState); // Set initial display
+    // Apply initial state (which might include expansion)
+    widgetState = { ...widgetState, ...initialState }; // Update local cache
+    updateCornerWidget(widgetState); // Update display based on full state
 
-    // Make visible
+    // Make host visible (it's just an overlay frame now)
     setTimeout(() => {
-      if (widgetHost) widgetHost.style.opacity = '1';
+      if (widgetHost) widgetHost.style.opacity = '1'; // Opacity doesn't matter much for non-interactive overlay
     }, 0);
 
-    // --- Event Listeners for Widget (within Shadow DOM) ---
-    widgetShadowRoot.querySelector('.ff-widget-toggle-btn').addEventListener('click', (e) => {
+    // Event Listeners (attach to elements *inside* widgetElement)
+    widgetElement.querySelector('.ff-widget-toggle-btn').addEventListener('click', (e) => {
         e.stopPropagation();
         toggleWidgetExpansion();
     });
-    widgetShadowRoot.querySelector('.ff-widget-move-btn').addEventListener('click', (e) => {
+    
+    const moveButton = widgetElement.querySelector('.ff-widget-move-btn');
+    if (moveButton) {
+      moveButton.addEventListener('click', (e) => {
         e.stopPropagation();
+        e.preventDefault();
         handleMoveWidget();
-    });
-    widgetShadowRoot.querySelector('.ff-widget-header').addEventListener('click', () => toggleWidgetExpansion());
-    widgetShadowRoot.querySelector('.ff-button-pause-resume').addEventListener('click', handleWidgetPauseResume);
-    widgetShadowRoot.querySelector('.ff-button-close').addEventListener('click', handleWidgetEndBrowsing);
+      });
+    } else {
+        console.error("FocusFinder Error: Could not find move button to attach listener.");
+    }
+    
+    widgetElement.querySelector('.ff-widget-header').addEventListener('click', () => toggleWidgetExpansion()); 
+    widgetElement.querySelector('.ff-button-pause-resume').addEventListener('click', handleWidgetPauseResume);
+    widgetElement.querySelector('.ff-button-close').addEventListener('click', handleWidgetEndBrowsing);
 
-    widgetShadowRoot.querySelectorAll('.ff-button-extend').forEach(btn => {
+    widgetElement.querySelectorAll('.ff-button-extend').forEach(btn => {
       btn.addEventListener('click', (e) => {
         const minutes = e.target.dataset.extendMinutes;
         handleWidgetExtendTime(minutes);
       });
     });
-
-    // Set initial position on the host
-    positionWidget(widgetState.position || 'bottom-right');
   }
 
   function updateCornerWidget(state) {
-    if (!widgetShadowRoot || !widgetHost) return;
+    // Ensure shadow root exists before querying
+    if (!widgetShadowRoot) return;
 
-    widgetState = { ...widgetState, ...state }; // Update local cache
+    widgetState = { ...widgetState, ...state }; // Update local cache before UI
 
     const { intention, timeSpent, reminderTime, isPaused, isTimeUp, expanded, pauseReason, position } = widgetState;
 
     const widgetElement = widgetShadowRoot.querySelector('.ff-corner-widget');
-    if (!widgetElement) return; // Element not found in shadow root
+    if (!widgetElement) return;
 
-    // Update Classes based on state
+    // Check if position needs updating
+    const currentVisualPosition = widgetState.position; // Assuming state reflects visual
+    if (position && position !== currentVisualPosition) {
+        positionWidgetElement(widgetElement, position);
+    }
+
+    // Update Classes based on state (keep this)
     widgetElement.classList.toggle('expanded', expanded);
     widgetElement.classList.toggle('collapsed', !expanded);
     widgetElement.classList.toggle('paused', isPaused);
     widgetElement.classList.toggle('time-up', isTimeUp);
 
-    // Apply position to host if changed
-    if (position && widgetHost.getAttribute('data-position') !== position) {
-      positionWidget(position);
-    }
-
-    // Header
-    const titleEl = widgetShadowRoot.querySelector('.ff-title');
-    const timerCondensedEl = widgetShadowRoot.querySelector('.ff-widget-timer-condensed');
-    const headerEl = widgetShadowRoot.querySelector('.ff-widget-header');
-
+    // Header updates...
+    const titleEl = widgetElement.querySelector('.ff-title');
+    const timerCondensedEl = widgetElement.querySelector('.ff-widget-timer-condensed');
+    const headerEl = widgetElement.querySelector('.ff-widget-header');
     if (expanded) {
-      titleEl.textContent = 'FocusFinder';
-      timerCondensedEl.textContent = '';
-      headerEl.classList.remove('ff-header-collapsed');
-      const closeButton = widgetShadowRoot.querySelector('.ff-button-close');
-      if (closeButton) closeButton.title = `Close all ${currentDomain} tabs`;
+        titleEl.textContent = 'FocusFinder';
+        timerCondensedEl.textContent = ''; // Hide condensed timer when expanded
+        headerEl.classList.remove('ff-header-collapsed');
+        // Update close button title if it exists
+        const closeButton = widgetElement.querySelector('.ff-button-close');
+        if (closeButton) closeButton.title = `Close all ${currentDomain} tabs`;
     } else {
-      const displayIntention = intention || 'No goal set';
-      titleEl.textContent = displayIntention.length > 25 ? displayIntention.substring(0, 25) + '...' : displayIntention;
-      timerCondensedEl.textContent = formatTime(timeSpent);
-      headerEl.classList.add('ff-header-collapsed');
+        // Show intention text in collapsed view, truncate if too long
+        const displayIntention = intention || 'No goal set';
+        // Adjusted length slightly
+        titleEl.textContent = displayIntention.length > 25
+            ? displayIntention.substring(0, 25) + '...'
+            : displayIntention;
+        timerCondensedEl.textContent = formatTime(timeSpent); // Show timer in collapsed view
+        headerEl.classList.add('ff-header-collapsed');
     }
-    timerCondensedEl.classList.toggle('ff-time-up-condensed', isTimeUp && !expanded);
-    if (isPaused && !expanded) timerCondensedEl.textContent += ' (Paused)';
 
-    // Progress Bar
-    const progressBar = widgetShadowRoot.querySelector('.ff-progress-bar');
+    // Show condensed timer in red if time is up
+    timerCondensedEl.classList.toggle('ff-time-up-condensed', isTimeUp && !expanded);
+
+    // Add pause indicator to condensed view
+    if (isPaused && !expanded) {
+        timerCondensedEl.textContent += ' (Paused)';
+    }
+
+    // Progress Bar updates...
+    const progressBar = widgetElement.querySelector('.ff-progress-bar');
     const progress = Math.min(1, (reminderTime > 0 ? timeSpent / reminderTime : 0));
     progressBar.style.width = `${progress * 100}%`;
     progressBar.classList.toggle('ff-progress-bar-timeup', isTimeUp);
 
-    // Content (only update if expanded)
+    // Content updates (only if expanded)...
     if (expanded) {
-      widgetShadowRoot.querySelector('.ff-intention-text').textContent = intention || 'Not set';
-      widgetShadowRoot.querySelector('.ff-timer-value').textContent = formatTime(timeSpent);
-      widgetShadowRoot.querySelector('.ff-timer-limit').textContent = formatTime(reminderTime);
-      widgetShadowRoot.querySelector('.ff-timer-value').classList.toggle('ff-time-alert', isTimeUp);
+        widgetElement.querySelector('.ff-intention-text').textContent = intention || 'Not set';
+        widgetElement.querySelector('.ff-timer-value').textContent = formatTime(timeSpent);
+        widgetElement.querySelector('.ff-timer-limit').textContent = formatTime(reminderTime);
+        widgetElement.querySelector('.ff-timer-value').classList.toggle('ff-time-alert', isTimeUp);
 
-      const pauseResumeButton = widgetShadowRoot.querySelector('.ff-button-pause-resume');
-      const pauseIcon = pauseResumeButton.querySelector('.ff-icon-pause');
-      const resumeIcon = pauseResumeButton.querySelector('.ff-icon-resume');
-      const pauseResumeText = pauseResumeButton.querySelector('span');
-      if (isPaused) {
-        pauseIcon.style.display = 'none'; resumeIcon.style.display = 'inline-block';
-        pauseResumeText.textContent = 'Resume'; pauseResumeButton.title = "Resume tracking";
-      } else {
-        pauseIcon.style.display = 'inline-block'; resumeIcon.style.display = 'none';
-        pauseResumeText.textContent = 'Pause'; pauseResumeButton.title = "Pause tracking";
-      }
+        // Pause/Resume Button (query within shadow root)
+        const pauseResumeButton = widgetElement.querySelector('.ff-button-pause-resume');
+        const pauseIcon = pauseResumeButton.querySelector('.ff-icon-pause');
+        const resumeIcon = pauseResumeButton.querySelector('.ff-icon-resume');
+        const pauseResumeText = pauseResumeButton.querySelector('span');
 
-      widgetShadowRoot.querySelector('.ff-pause-indicator').style.display = isPaused ? 'block' : 'none';
-      widgetShadowRoot.querySelector('.ff-timeup-indicator').style.display = isTimeUp ? 'block' : 'none';
-      widgetShadowRoot.querySelector('.ff-extend-section').style.display = isTimeUp ? 'block' : 'none';
-      widgetShadowRoot.querySelector('.ff-timer-display').classList.toggle('ff-time-alert', isTimeUp);
+        if (isPaused) {
+            pauseIcon.style.display = 'none';
+            resumeIcon.style.display = 'inline-block';
+            pauseResumeText.textContent = 'Resume';
+            pauseResumeButton.title = "Resume tracking";
+        } else {
+            pauseIcon.style.display = 'inline-block';
+            resumeIcon.style.display = 'none';
+            pauseResumeText.textContent = 'Pause';
+            pauseResumeButton.title = "Pause tracking";
+        }
+
+        // Indicators (query within shadow root)
+        widgetElement.querySelector('.ff-pause-indicator').style.display = isPaused ? 'block' : 'none';
+        widgetElement.querySelector('.ff-timeup-indicator').style.display = isTimeUp ? 'block' : 'none';
+
+        // Extend Section visibility (query within shadow root)
+        widgetElement.querySelector('.ff-extend-section').style.display = isTimeUp ? 'block' : 'none';
+
+        // Timer Display styling (query within shadow root)
+        widgetElement.querySelector('.ff-timer-display').classList.toggle('ff-time-alert', isTimeUp);
     }
   }
 
   function removeCornerWidget() {
     if (widgetHost) {
-      widgetHost.remove();
+      widgetHost.remove(); // Remove host element
       widgetHost = null;
-      widgetShadowRoot = null;
+      widgetShadowRoot = null; // Clear references
     }
   }
 
   function toggleWidgetExpansion(forceExpand = null) {
+     // Check shadow root exists
      if (!widgetShadowRoot) return;
      const shouldBeExpanded = typeof forceExpand === 'boolean' ? forceExpand : !widgetState.expanded;
      if(widgetState.expanded !== shouldBeExpanded) {
          widgetState.expanded = shouldBeExpanded;
          updateCornerWidget(widgetState); // Update UI within shadow DOM
-         browserAPI.runtime.sendMessage({ action: "saveWidgetState", domain: currentDomain, expanded: widgetState.expanded });
+         // Save preference to background
+         chrome.runtime.sendMessage({ action: "saveWidgetState", domain: currentDomain, expanded: widgetState.expanded });
      }
   }
 
   function highlightWidget() {
+    // Highlight the host element for visibility
     if (!widgetHost) return;
-    // Highlight the host element
-    const originalBorder = widgetHost.style.outline || 'none';
-    widgetHost.style.outline = '2px solid var(--accent-blue)'; // Use outline for host
+    const originalOutline = widgetHost.style.outline || 'none';
+    widgetHost.style.outline = '2px solid var(--accent-blue)'; // Use outline on host
     widgetHost.style.outlineOffset = '2px';
 
     setTimeout(() => {
-      if (widgetHost) widgetHost.style.outline = originalBorder;
-    }, 1000);
+      if (widgetHost) widgetHost.style.outline = originalOutline;
+    }, 1000); // Simple flash
   }
 
   function showToast(message, duration = 3000) {
-    // Toast remains outside Shadow DOM for simplicity
-    let toast = document.querySelector('#ff-toast-host'); // Use a host ID
-    if (!toast) {
-      toast = document.createElement('div');
-      toast.id = 'ff-toast-host';
+    // Create a host for the toast if it doesn't exist
+    if (!toastHost) {
+      toastHost = document.createElement('div');
+      toastHost.id = 'ff-toast-host';
       // Basic styling for the host itself
-      toast.style.position = 'fixed';
-      toast.style.bottom = '20px';
-      toast.style.left = '20px';
-      toast.style.zIndex = '2147483647';
-      toast.style.pointerEvents = 'none';
-      document.body.appendChild(toast);
+      toastHost.style.position = 'fixed';
+      toastHost.style.bottom = '20px';
+      toastHost.style.left = '20px';
+      toastHost.style.zIndex = '2147483647'; // Max z-index
+      toastHost.style.pointerEvents = 'none'; // Allow clicks through host
+      document.body.appendChild(toastHost);
 
-      // Inject styles into toast shadow DOM if needed, or style host directly
-      const toastShadow = toast.attachShadow({ mode: 'open' });
-      injectStyles(toastShadow); // Inject full styles
+      toastShadowRoot = toastHost.attachShadow({ mode: 'open' });
+      injectStyles(toastShadowRoot); // Inject styles into toast shadow DOM
+
+      // Create the actual toast element inside the shadow DOM
       const toastElement = document.createElement('div');
       toastElement.className = 'ff-toast ff-root'; // Apply root class
-      toastShadow.appendChild(toastElement);
+      toastShadowRoot.appendChild(toastElement);
     }
 
-    const toastShadowRoot = toast.shadowRoot;
+    // Get the toast element from the shadow root
     const toastElement = toastShadowRoot.querySelector('.ff-toast');
+    if (!toastElement) return; // Should not happen
 
     toastElement.textContent = message;
     toastElement.classList.add('show');
 
+    // Simple timeout to hide the toast
     setTimeout(() => {
       toastElement.classList.remove('show');
       // Optionally remove the host after a delay if not shown again soon
-      // setTimeout(() => { if (!toastElement.classList.contains('show')) toast.remove(); }, 1000);
+      // setTimeout(() => { if (!toastElement.classList.contains('show')) toastHost.remove(); toastHost = null; toastShadowRoot = null; }, 1000);
     }, duration);
   }
 
+
   function playTimerCompletionSound() {
-    const audio = new Audio(browserAPI.runtime.getURL('sounds/bubble.mp3'));
+    // Use the bubble.mp3 file from the sounds directory
+    const audio = new Audio(chrome.runtime.getURL('sounds/bubble.mp3'));
     audio.volume = 0.5;
-    audio.play().catch(error => console.log("FocusFinder Content Script: Error playing sound:", error));
+    audio.play().catch(error => {
+      console.log("FocusFinder Content Script: Error playing sound:", error);
+    });
   }
 
   // --- Event Handling ---
-  // (Handlers mostly remain the same, just ensure messages are sent correctly)
+  // Handlers remain mostly the same, just ensure messages are sent correctly
 
   function handlePromptContinue(reason, durationSeconds) {
-    browserAPI.runtime.sendMessage({
-      action: "intentionSet", domain: currentDomain, intention: reason, duration: durationSeconds
-    }).catch(error => console.error("FocusFinder Content Script: Error sending intention set:", error));
+    console.log("FocusFinder Content Script: Continue clicked. Reason:", reason, "Duration:", durationSeconds + "s");
+    chrome.runtime.sendMessage({
+      action: "intentionSet",
+      domain: currentDomain,
+      intention: reason,
+      duration: durationSeconds
+    });
     removeIntentionPrompt();
+    // Widget creation will be triggered by 'intentionConfirmed' message from background
   }
 
   function handlePromptCloseTabs() {
-    browserAPI.runtime.sendMessage({ action: "closeAllTabs", domain: currentDomain })
-      .catch(error => console.error("FocusFinder Content Script: Error sending close tabs:", error));
+    console.log("FocusFinder Content Script: Close Tabs clicked in prompt.");
+    chrome.runtime.sendMessage({ action: "closeAllTabs", domain: currentDomain });
     removeIntentionPrompt();
   }
 
   function handleWidgetPauseResume() {
     const action = widgetState.isPaused ? "resumeTimer" : "pauseTimer";
-    const wasIsPaused = widgetState.isPaused;
-    widgetState.isPaused = !wasIsPaused;
-    widgetState.pauseReason = wasIsPaused ? '' : 'userPaused';
-    updateCornerWidget(widgetState); // Optimistic UI update
-
-    browserAPI.runtime.sendMessage({ action: action, domain: currentDomain })
-      .catch(error => {
-        console.error("FocusFinder Content Script: Error sending pause/resume:", error);
-        widgetState.isPaused = wasIsPaused; // Revert UI
-        widgetState.pauseReason = wasIsPaused ? 'userPaused' : '';
-        updateCornerWidget(widgetState);
-      });
+    console.log("FocusFinder Content Script: Sending", action);
+    // Optimistic UI update (optional but can feel snappier)
+    // widgetState.isPaused = !widgetState.isPaused;
+    // updateCornerWidget(widgetState);
+    chrome.runtime.sendMessage({ action: action, domain: currentDomain });
+    // UI update will happen via message from background anyway
   }
 
-  function handleWidgetExtendTime(minutes) {
-    if (widgetState.hasExtended) {
-      showExtendConfirmation(currentDomain, minutes);
-    } else {
-      widgetState.hasExtended = true; // Mark first extension
-      browserAPI.runtime.sendMessage({ action: "extendTime", domain: currentDomain, minutes: parseInt(minutes) })
-        .catch(error => console.error("FocusFinder Content Script: Error sending extend time:", error));
-    }
+  function handleWidgetExtendTime(minutes) { 
+    // The background script now handles the logic of whether to extend directly
+    // or request confirmation. This function just sends the initial request.
+    chrome.runtime.sendMessage({
+        action: "extendTime", // Regular extend request
+        domain: currentDomain,
+        minutes: parseInt(minutes)
+    }).catch(error => console.error("FocusFinder Content Script: Error sending extend time request:", error));
   }
 
   function handleWidgetEndBrowsing() {
-    browserAPI.runtime.sendMessage({ action: "closeAllTabs", domain: currentDomain })
-      .catch(error => console.error("FocusFinder Content Script: Error sending close tabs:", error));
-    removeCornerWidget();
+    if (confirmationHost) removeExtendConfirmation(); // Close confirmation if ending session
+    chrome.runtime.sendMessage({
+        action: "closeAllTabs",
+        domain: currentDomain
+    });
+    removeCornerWidget(); // Remove widget immediately on user action
   }
 
   function visibilityChangeHandler() {
-      browserAPI.runtime.sendMessage({
-          action: "visibilityChanged", domain: currentDomain, isVisible: document.visibilityState === 'visible'
+      console.log("FocusFinder Content Script: Visibility changed to", document.visibilityState);
+      chrome.runtime.sendMessage({
+          action: "visibilityChanged",
+          domain: currentDomain,
+          tabId: null, // Content script doesn't know its tab ID, background script uses sender.tab.id
+          isVisible: document.visibilityState === 'visible'
       }).catch(error => console.error("FocusFinder Content Script: Error in visibility change:", error));
   }
 
-  function positionWidget(position) {
-    if (!widgetHost) return;
+  // --- New Positioning Logic for Inner Widget Element ---
+  function positionWidgetElement(widgetElement, position) {
+    if (!widgetElement) return;
 
-    // Reset host position styles
-    widgetHost.style.top = 'auto';
-    widgetHost.style.right = 'auto';
-    widgetHost.style.bottom = 'auto';
-    widgetHost.style.left = 'auto';
-    widgetHost.setAttribute('data-position', position); // Store on host
-
-    // Set new position on host with specific pixel values
+    // Define positions and default offset
+    const positions = ['bottom-right', 'bottom-left', 'top-left', 'top-right'];
     const offset = '20px';
-    switch (position) {
-        case 'bottom-right':
-            widgetHost.style.bottom = offset;
-            widgetHost.style.right = offset;
-            break;
-        case 'bottom-left':
-            widgetHost.style.bottom = offset;
-            widgetHost.style.left = offset;
-            break;
-        case 'top-left':
-            widgetHost.style.top = offset;
-            widgetHost.style.left = offset;
-            break;
-        case 'top-right':
-            widgetHost.style.top = offset;
-            widgetHost.style.right = offset;
-            break;
-    }
-    
-    // Update widget state
-    widgetState.position = position;
 
-    // Save position to background
-    browserAPI.runtime.sendMessage({
+    // Set position absolute within the fixed host
+    widgetElement.style.position = 'absolute';
+    widgetElement.style.transition = 'all 0.3s ease'; // Apply transition here
+
+    // Remove existing position classes from the inner element
+    positions.forEach(p => widgetElement.classList.remove(`ff-pos-inner-${p}`));
+
+    // Reset styles before applying new ones
+    widgetElement.style.top = 'auto';
+    widgetElement.style.right = 'auto';
+    widgetElement.style.bottom = 'auto';
+    widgetElement.style.left = 'auto';
+
+    // Apply new position styles
+    switch (position) {
+      case 'bottom-right':
+        widgetElement.style.bottom = offset;
+        widgetElement.style.right = offset;
+        widgetElement.classList.add('ff-pos-inner-bottom-right');
+        break;
+      case 'bottom-left':
+        widgetElement.style.bottom = offset;
+        widgetElement.style.left = offset;
+        widgetElement.classList.add('ff-pos-inner-bottom-left');
+        break;
+      case 'top-left':
+        widgetElement.style.top = offset;
+        widgetElement.style.left = offset;
+        widgetElement.classList.add('ff-pos-inner-top-left');
+        break;
+      case 'top-right':
+        widgetElement.style.top = offset;
+        widgetElement.style.right = offset;
+        widgetElement.classList.add('ff-pos-inner-top-right');
+        break;
+      default:
+        widgetElement.style.bottom = offset;
+        widgetElement.style.right = offset;
+        widgetElement.classList.add('ff-pos-inner-bottom-right');
+        position = 'bottom-right';
+        break;
+    }
+
+    // Update state (position is now conceptually applied to the inner widget)
+    widgetState.position = position;
+    
+    // Save position preference to background (no change needed here)
+    chrome.runtime.sendMessage({
         action: "saveWidgetPosition",
         domain: currentDomain,
         position: position
     }).catch(error => console.error("FocusFinder Content Script: Error saving widget position:", error));
   }
 
+  // Update handleMoveWidget to use the new positioning function
   function handleMoveWidget() {
-    const currentPosition = widgetState.position || 'bottom-right';
+    // Get the widget element from the shadow DOM
+    const widgetElement = widgetShadowRoot?.querySelector('.ff-corner-widget');
+    if (!widgetElement) {
+      console.error("Cannot find inner widget element to move.");
+      return;
+    }
+
     const positions = ['bottom-right', 'bottom-left', 'top-left', 'top-right'];
+    const currentPosition = widgetState.position || 'bottom-right';
     const currentIndex = positions.indexOf(currentPosition);
     const nextIndex = (currentIndex + 1) % positions.length;
-    positionWidget(positions[nextIndex]); // Apply next position
+    const newPosition = positions[nextIndex];
+    
+    // Apply the new position to the inner widget element
+    positionWidgetElement(widgetElement, newPosition);
+    
+    // Force a reflow (might still be useful)
+    void widgetElement.offsetWidth;
   }
 
+  // --- Extend Confirmation Dialog ---
   function showExtendConfirmation(domain, minutes) {
-    if (confirmationHost) return; // Already showing
+    if (confirmationHost) removeExtendConfirmation(); // Remove existing if any
 
     confirmationHost = document.createElement('div');
     confirmationHost.id = 'ff-confirmation-host';
+    // Basic styling for host
+    confirmationHost.style.position = 'fixed';
+    confirmationHost.style.top = '0';
+    confirmationHost.style.left = '0';
+    confirmationHost.style.width = '100%';
+    confirmationHost.style.height = '100%';
+    confirmationHost.style.zIndex = '2147483647';
     document.body.appendChild(confirmationHost);
 
     confirmationShadowRoot = confirmationHost.attachShadow({ mode: 'open' });
-    injectStyles(confirmationShadowRoot);
+    injectStyles(confirmationShadowRoot); // Inject combined CSS
 
     const overlayElement = document.createElement('div');
     overlayElement.className = 'ff-overlay ff-root'; // Apply root class
@@ -744,7 +854,7 @@
     overlayElement.innerHTML = `
       <div class="ff-dialog">
         <div class="ff-dialog-header">
-          Are you sure? You already extended your time before
+          Are you sure? You already extended your time.
         </div>
         <div class="ff-dialog-content">
           <div class="ff-warning">
@@ -752,13 +862,13 @@
           </div>
         </div>
         <div class="ff-dialog-footer">
-          <button id="ff-extend-close" class="ff-button" title="Close all tabs">
+          <button id="ff-extend-close" class="ff-button" title="Close all tabs for this domain">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
-            Close all ${domain} tabs
+            End Session for ${domain}
           </button>
           <button id="ff-extend-confirm" class="ff-button ff-button-primary">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
-            Extend time
+            Extend by ${minutes} min
           </button>
         </div>
       </div>
@@ -766,35 +876,43 @@
 
     confirmationShadowRoot.appendChild(overlayElement);
 
+    // Event listener for closing tabs
     confirmationShadowRoot.querySelector('#ff-extend-close').addEventListener('click', () => {
       removeExtendConfirmation();
-      handleWidgetEndBrowsing();
+      handleWidgetEndBrowsing(); // Use existing function
     });
 
+    // Event listener for confirming extension
     confirmationShadowRoot.querySelector('#ff-extend-confirm').addEventListener('click', () => {
       removeExtendConfirmation();
-      browserAPI.runtime.sendMessage({ action: "extendTime", domain: currentDomain, minutes: parseInt(minutes) })
-        .catch(error => console.error("FocusFinder Content Script: Error sending extend time:", error));
+      // Send the *force* extend message to the background script
+      chrome.runtime.sendMessage({
+          action: "forceExtendTime", // Use the new action
+          domain: currentDomain,
+          minutes: parseInt(minutes)
+      }).catch(error => console.error("FocusFinder Content Script: Error sending force extend time:", error));
     });
 
+    // Optional: Close if clicking outside the dialog
     overlayElement.addEventListener('click', (e) => {
-      if (e.target === overlayElement) { /* Click on overlay background */ }
+      if (e.target === overlayElement) {
+         // Currently does nothing, add removeExtendConfirmation(); if desired
+      }
     });
   }
 
-   function removeExtendConfirmation() {
-       if (confirmationHost) {
-           confirmationHost.remove();
-           confirmationHost = null;
-           confirmationShadowRoot = null;
-       }
-   }
+  function removeExtendConfirmation() {
+    if (confirmationHost) {
+      confirmationHost.remove();
+      confirmationHost = null;
+      confirmationShadowRoot = null;
+    }
+  }
 
-  // --- Start Initialization ---
+  // Initialize as soon as DOM is ready
   if(document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', init);
   } else {
     init();
   }
-
-})();
+}

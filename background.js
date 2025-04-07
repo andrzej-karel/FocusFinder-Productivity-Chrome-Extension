@@ -1,54 +1,33 @@
-﻿﻿// FocusFinder - Background Service Worker
-// This script manages the core functionality of the FocusFinder extension, including:
-// - Timer management for tracked domains
-// - User intention tracking
-// - Browser focus and visibility state management
-// - Settings persistence and synchronization
-// - Communication with content scripts
-
-// Import browser detection utilities
-import './browser-polyfill.js';
-import { getBrowserAPI } from './browserDetection.js';
-
-// Use the browser API consistently throughout the code
-// This ensures compatibility between Chrome and Firefox
-const browserAPI = typeof browser !== 'undefined' ? browser : chrome;
-
-// --- Default Settings ---
-// These settings are used when the extension is first installed
-// or if the settings storage is corrupted/cleared
+﻿// --- Default Settings ---
 const defaultSettings = {
-  // List of domains to monitor for time tracking
   watchlist: [
     "facebook.com", "x.com", "twitter.com", "instagram.com", "youtube.com",
     "tiktok.com", "linkedin.com", "reddit.com", "yahoo.com", "cnn.com",
     "foxnews.com", "nbc.com", "cbs.com", "bbc.com", "amazon.com", "ebay.com"
   ],
-  // Default reasons shown in the intention prompt
   defaultReasons: [
     "Messaging", "Searching info", "Checking notifications", "Taking a break"
   ],
-  userReasons: [], // Custom reasons added by the user
-  pauseOnBlur: true, // Whether to pause timers when window loses focus
-  isExtensionEnabled: true, // Global extension on/off state
-  domains: [], // List of actively tracked domains
-  domainStates: {} // Per-domain tracking states
+  userReasons: [],
+  pauseOnBlur: true, // Default to ON as requested
+  isExtensionEnabled: true,
+  domains: [],
+  domainStates: {}
 };
 
 // --- State Variables ---
-// Runtime state management for domain tracking and timers
-let domainStates = {}; // In-memory state of all tracked domains
+let domainStates = {}; // In-memory state
 let settings = { ...defaultSettings };
-let activeTabId = null; // Currently focused tab
-let activeDomain = null; // Domain of the active tab
-let isWindowFocused = true; // Browser window focus state
-const BLUR_GRACE_PERIOD_MS = 4000; // Grace period before pausing on blur
-const INITIAL_STARTUP_GRACE_MS = 10000; // Initial delay before starting timers
+let activeTabId = null;
+let activeDomain = null;
+let isWindowFocused = true;
+const BLUR_GRACE_PERIOD_MS = 4000;
+const INITIAL_STARTUP_GRACE_MS = 10000; // 10 seconds for initial timer start
 const MAIN_TIMER_ALARM_NAME = 'focusFinderMainTimer';
 
 // --- Initialization ---
-browserAPI.runtime.onInstalled.addListener(onInstalledHandler);
-browserAPI.runtime.onStartup.addListener(initializeExtension); // Initialize on browser start
+chrome.runtime.onInstalled.addListener(onInstalledHandler);
+chrome.runtime.onStartup.addListener(initializeExtension); // Initialize on browser start
 initializeExtension(); // Initialize on script load (e.g., after update)
 
 async function initializeExtension() {
@@ -62,7 +41,7 @@ async function initializeExtension() {
 async function loadSettings() {
   try {
     // Always use local storage only
-    const result = await browserAPI.storage.local.get('settings');
+    const result = await chrome.storage.local.get('settings');
     if (result.settings) {
       // Merge with defaults and validate
       settings = { ...defaultSettings, ...result.settings };
@@ -72,8 +51,9 @@ async function loadSettings() {
     } else {
       console.log("FocusFinder: No settings found, using defaults.");
       settings = { ...defaultSettings };
+      // Need to save the defaults if none were found
+      await saveSettings();
     }
-    await saveSettings();
   } catch (error) {
     console.error("FocusFinder: Error loading settings:", error);
     settings = { ...defaultSettings };
@@ -84,7 +64,7 @@ async function loadSettings() {
 async function saveSettings() {
   try {
     // Always use local storage only
-    await browserAPI.storage.local.set({ settings: settings });
+    await chrome.storage.local.set({ settings: settings });
     console.log("FocusFinder: Settings saved to local storage:", settings);
   } catch (error) {
     console.error("FocusFinder: Error saving settings:", error);
@@ -94,7 +74,7 @@ async function saveSettings() {
 function onInstalledHandler(details) {
   if (details.reason === "install") {
     console.log("FocusFinder: First installation.");
-    browserAPI.storage.local.set({ settings: defaultSettings });
+    chrome.storage.local.set({ settings: defaultSettings });
     settings = { ...defaultSettings };
   } else if (details.reason === "update") {
     console.log("FocusFinder: Extension updated.");
@@ -105,28 +85,30 @@ function onInstalledHandler(details) {
 // --- Listeners Setup ---
 function setupListeners() {
   // Remove existing listeners before adding new ones to prevent duplicates during re-initialization
-  browserAPI.alarms.onAlarm.removeListener(mainTimerAlarmHandler);
-  browserAPI.windows.onFocusChanged.removeListener(windowFocusChangedHandler);
-  browserAPI.tabs.onUpdated.removeListener(tabUpdatedHandler);
-  browserAPI.tabs.onActivated.removeListener(tabActivatedHandler);
-  browserAPI.tabs.onRemoved.removeListener(tabRemovedHandler);
-  browserAPI.runtime.onMessage.removeListener(messageHandler);
-  browserAPI.storage.onChanged.removeListener(storageChangeHandler);
+  // This is important if the background script restarts or is updated.
+  chrome.alarms.onAlarm.removeListener(mainTimerAlarmHandler);
+  chrome.windows.onFocusChanged.removeListener(windowFocusChangedHandler);
+  chrome.tabs.onUpdated.removeListener(tabUpdatedHandler);
+  chrome.tabs.onActivated.removeListener(tabActivatedHandler);
+  chrome.tabs.onRemoved.removeListener(tabRemovedHandler);
+  chrome.runtime.onMessage.removeListener(messageHandler);
+  chrome.storage.onChanged.removeListener(storageChangeHandler);
 
   // Add listeners
-  browserAPI.alarms.onAlarm.addListener(mainTimerAlarmHandler);
-  browserAPI.windows.onFocusChanged.addListener(windowFocusChangedHandler);
-  browserAPI.tabs.onUpdated.addListener(tabUpdatedHandler);
-  browserAPI.tabs.onActivated.addListener(tabActivatedHandler);
-  browserAPI.tabs.onRemoved.addListener(tabRemovedHandler);
-  browserAPI.runtime.onMessage.addListener(messageHandler);
-  browserAPI.storage.onChanged.addListener(storageChangeHandler);
+  chrome.alarms.onAlarm.addListener(mainTimerAlarmHandler);
+  chrome.windows.onFocusChanged.addListener(windowFocusChangedHandler);
+  chrome.tabs.onUpdated.addListener(tabUpdatedHandler);
+  chrome.tabs.onActivated.addListener(tabActivatedHandler);
+  chrome.tabs.onRemoved.addListener(tabRemovedHandler);
+  chrome.runtime.onMessage.addListener(messageHandler);
+  chrome.storage.onChanged.addListener(storageChangeHandler);
 }
 
 // --- Main Timer ---
+// Runs every second to check the active tab's domain state
 function createMainTimerAlarm() {
   console.log("FocusFinder: Creating main timer alarm.");
-  browserAPI.alarms.create(MAIN_TIMER_ALARM_NAME, {
+  chrome.alarms.create(MAIN_TIMER_ALARM_NAME, {
     periodInMinutes: 1 / 60 // Run every second
   });
 }
@@ -152,7 +134,7 @@ function mainTimerAlarmHandler(alarm) {
           timeSpent: state.timeSpent,
           intention: state.intention,
           reminderTime: state.reminderTime,
-          shouldPlaySound: true  // Add sound flag
+          shouldPlaySound: true
         });
       }
 
@@ -170,7 +152,7 @@ function mainTimerAlarmHandler(alarm) {
 // --- Focus & Activity Handling ---
 function windowFocusChangedHandler(windowId) {
   const previouslyFocused = isWindowFocused;
-  isWindowFocused = windowId !== browserAPI.windows.WINDOW_ID_NONE;
+  isWindowFocused = windowId !== chrome.windows.WINDOW_ID_NONE;
 
   if (previouslyFocused !== isWindowFocused) {
     console.log("FocusFinder: Window focus changed:", isWindowFocused);
@@ -181,10 +163,6 @@ function windowFocusChangedHandler(windowId) {
       setTimeout(() => {
         // Only resume if we still have focus after a slight delay
         if (isWindowFocused) {
-          // Set a brief immunity period when regaining focus
-          if (activeDomain && domainStates[activeDomain]) {
-            domainStates[activeDomain].ignorePauseOnBlurUntil = Date.now() + 2000;
-          }
           updatePauseStateForAllDomains();
         }
       }, 100);
@@ -202,6 +180,7 @@ async function handleVisibilityChange(domain, tabId, isVisible) {
   console.log("FocusFinder: Tab visibility change for", domain, "(Tab", tabId, "):", isVisible);
   if (tabId === activeTabId && domainStates[domain]) {
      // Store visibility state - might be useful combined with focus
+     // Note: Visibility alone doesn't pause, but is considered by updateDomainPauseState
      domainStates[domain].lastVisibilityState = isVisible;
      updateDomainPauseState(domain);
   }
@@ -238,7 +217,7 @@ function updateDomainPauseState(domain, reasonOverride = null) {
       shouldBePaused = true;
       newPauseReason = 'tabSwitched';
     } else if (settings.pauseOnBlur && !isWindowFocused) {
-      // Check for immunity flag before applying pauseOnBlur
+      // Check for temporary immunity (e.g., after regaining focus)
       const now = Date.now();
       if (state.ignorePauseOnBlurUntil && now < state.ignorePauseOnBlurUntil) {
         console.log("FocusFinder: Ignoring pauseOnBlur due to immunity flag for", domain);
@@ -250,7 +229,7 @@ function updateDomainPauseState(domain, reasonOverride = null) {
         if (state.pauseReason !== 'windowBlurred' && state.pauseReason !== 'blurGracePeriod') {
           // Start grace period only if not already blurred/in grace
           newPauseReason = 'blurGracePeriod';
-          clearTimeout(state.blurTimeoutId); // Clear any previous timeout
+          clearTimeout(state.blurTimeoutId); // Prevent multiple grace period timeouts
           state.blurTimeoutId = setTimeout(() => {
             // Check focus again *after* the timeout
             if (!isWindowFocused && domain === activeDomain && state.pauseReason === 'blurGracePeriod') {
@@ -269,6 +248,12 @@ function updateDomainPauseState(domain, reasonOverride = null) {
       // If focus returned, clear any blur timeout
       clearTimeout(state.blurTimeoutId);
       state.blurTimeoutId = null;
+      
+      // Clear the immunity flag if we've actively resumed focus
+      if (state.ignorePauseOnBlurUntil) {
+        console.log("FocusFinder: Clearing pauseOnBlur immunity for", domain, "as focus is active");
+        state.ignorePauseOnBlurUntil = null;
+      }
     }
   }
 
@@ -356,7 +341,7 @@ async function tabActivatedHandler(activeInfo) {
   console.log("FocusFinder: Tab activated:", tabId);
 
   try {
-    const tab = await browserAPI.tabs.get(tabId);
+    const tab = await chrome.tabs.get(tabId);
     if (tab && tab.url) {
       const newDomain = extractDomain(tab.url);
       console.log("FocusFinder: Activated tab domain:", newDomain);
@@ -448,7 +433,7 @@ function tabRemovedHandler(tabId, removeInfo) {
       // Force a check of all tabs after a short delay to ensure we update the state correctly
       setTimeout(async () => {
         try {
-          const tabs = await browserAPI.tabs.query({active: true, currentWindow: true});
+          const tabs = await chrome.tabs.query({active: true, currentWindow: true});
           if (tabs.length > 0) {
             const activeTab = tabs[0];
             console.log("FocusFinder: New active tab after close:", activeTab.id);
@@ -479,12 +464,14 @@ async function checkDomainStatus(tabId, url) {
          if (settings.isExtensionEnabled) {
             console.log("FocusFinder: New watched domain. Requesting intention for tab.");
             await requestIntention(domain, tabId);
-            // Initialize state partially to track tabs even before intention
+            // Initialize state partially to track tabs, initially paused
              domainStates[domain] = {
                 intention: "", intentionSet: false, timeSpent: 0, reminderTime: 300, // Default 5 min
                 isTracking: false, isPaused: true, pauseReason: 'noIntention', reminderShown: false,
                 blurTimeoutId: null, tabIds: new Set([tabId]), widgetExpanded: false, lastVisibilityState: true,
-                initialGracePeriodId: null, ignorePauseOnBlurUntil: null // Added immunity flag field
+                initialGracePeriodId: null, ignorePauseOnBlurUntil: null, // Added immunity flag field
+                widgetPosition: 'bottom-right', // Add default position
+                hasExtended: false // Initialize hasExtended flag
             };
          } else {
              console.log("FocusFinder: Extension disabled, not prompting for.");
@@ -503,7 +490,7 @@ async function checkDomainStatus(tabId, url) {
             // NEW: Use immunity flag instead of grace period for new tab activation
             if (settings.pauseOnBlur) {
                 // Set a short immunity to pauseOnBlur for this tab activation
-                domainStates[domain].ignorePauseOnBlurUntil = Date.now() + 500; // 500ms immunity
+                domainStates[domain].ignorePauseOnBlurUntil = Date.now() + 500;
                 console.log("FocusFinder: Setting short pauseOnBlur immunity for new tab activation:", domain);
                 
                 // Ensure the timer is running initially for this tab
@@ -531,22 +518,20 @@ async function checkDomainStatus(tabId, url) {
       }
     }
   } else {
-      // Domain is not watched, do nothing related to tracking
-      // If this was the previously active domain, ensure it's paused/stopped
-       if (domainStates[domain]) {
-           console.log("FocusFinder: Domain is no longer watched (or never was). Ensuring state is removed/paused.");
-           updateDomainPauseState(domain, 'notWatched'); // Pause it
-       }
+      // Domain is not watched
+      if (domainStates[domain]) {
+          console.log("FocusFinder: Domain is no longer watched (or never was). Ensuring state is removed/paused.");
+          updateDomainPauseState(domain, 'notWatched');
+      }
   }
 }
 
 // --- Communication & Handlers ---
 function messageHandler(message, sender, sendResponse) {
   console.log("FocusFinder: Received message:", message, "From:", sender.tab ? "Tab" : "Popup/Other");
-  const domain = message.domain;
-  const tabId = sender.tab ? sender.tab.id : message.tabId; // Use message.tabId if sent from popup
+  const domain = message.domain || activeDomain; // Use message domain if provided, else assume active
 
-  // Async handling
+  // Wrap message handling in an async IIFE for cleaner async/await usage
   (async () => {
     try {
       switch (message.action) {
@@ -562,7 +547,7 @@ function messageHandler(message, sender, sendResponse) {
           break;
         case "intentionSet":
           if (!domain) { throw new Error("Domain missing"); }
-          await handleIntentionSet(domain, message.intention, message.duration, tabId);
+          await handleIntentionSet(domain, message.intention, message.duration, message.tabId);
           sendResponse({ success: true });
           break;
         case "pauseTimer":
@@ -577,17 +562,19 @@ function messageHandler(message, sender, sendResponse) {
           break;
         case "resumeTimer":
           if (!domain) { throw new Error("Domain missing"); }
+          // Add immunity to blur pause when manually resuming
           if (domainStates[domain]) {
-            // Add immunity period when manually resuming
-            domainStates[domain].ignorePauseOnBlurUntil = Date.now() + 2000; // 2 second immunity
-            console.log("FocusFinder: Setting pauseOnBlur immunity for manual resume:", domain);
+            const immunityDuration = 1500; // Grant 1.5 seconds immunity
+            domainStates[domain].ignorePauseOnBlurUntil = Date.now() + immunityDuration; 
+            console.log(`FocusFinder: Granting ${immunityDuration}ms pauseOnBlur immunity for manual resume:`, domain);
           }
-          updateDomainPauseState(domain, ''); // Empty reason signifies resume attempt
+          updateDomainPauseState(domain, ''); // Attempt resume
           sendResponse({ success: true });
           break;
         case "extendTime":
+        case "forceExtendTime": // New message type for confirmed extension
           if (!domain) { throw new Error("Domain missing"); }
-          await handleExtendTime(domain, message.minutes);
+          await handleExtendTime(domain, message.minutes, message.action === "forceExtendTime");
           sendResponse({ success: true }); // Response should include updated state if needed by UI
           break;
         case "closeAllTabs":
@@ -607,21 +594,22 @@ function messageHandler(message, sender, sendResponse) {
           sendResponse(domainStates[domain] || {});
           break;
         case "visibilityChanged":
-           if (!domain || tabId === undefined) { throw new Error("Domain or TabId missing for visibility change"); }
-           await handleVisibilityChange(domain, tabId, message.isVisible);
+           if (!domain || message.tabId === undefined) { throw new Error("Domain or TabId missing for visibility change"); }
+           await handleVisibilityChange(domain, message.tabId, message.isVisible);
            sendResponse({ success: true });
            break;
         case "saveWidgetState":
            if (!domain) { throw new Error("Domain missing"); }
            if (domainStates[domain]) {
-              domainStates[domain].widgetExpanded = message.expanded;
+            domainStates[domain].widgetExpanded = message.expanded;
            }
            sendResponse({ success: true });
            break;
-        case "saveWidgetPosition":
+        case "saveWidgetPosition": // Add handler for saving position
            if (!domain) { throw new Error("Domain missing"); }
            if (domainStates[domain]) {
               domainStates[domain].widgetPosition = message.position;
+              console.log("FocusFinder: Saved widget position for", domain, ":", message.position);
            }
            sendResponse({ success: true });
            break;
@@ -647,48 +635,27 @@ async function broadcastToDomainTabs(domain, message) {
   console.log("FocusFinder: Broadcasting to", domainStates[domain].tabIds.size, "tabs for:", message);
   const promises = [];
   for (const tabId of domainStates[domain].tabIds) {
-    try {
-      promises.push(
-        sendMessageToTab(tabId, message).catch(error => {
-          console.warn("FocusFinder: Failed to send message to tab", tabId, "for:", error.message);
-          // If sending fails, maybe the tab was closed - remove it.
-          if(error.message.includes("No tab with id") || error.message.includes("Receiving end does not exist")){
-              domainStates[domain]?.tabIds.delete(tabId);
-               if (domainStates[domain]?.tabIds.size === 0) {
-                  console.log("FocusFinder: Deleting state for", domain, "- no tabs left after broadcast failure.");
-                  delete domainStates[domain];
-              }
-          }
-        })
-      );
-    } catch (error) {
-      console.error("FocusFinder: Exception broadcasting to tab", tabId, ":", error);
-      // Still try to clean up if possible
-      try {
-        if (domainStates[domain]?.tabIds) {
-          domainStates[domain].tabIds.delete(tabId);
-          if (domainStates[domain].tabIds.size === 0) {
-            console.log("FocusFinder: Deleting state for", domain, "- no tabs left after broadcast exception.");
-            delete domainStates[domain];
-          }
+    promises.push(
+      sendMessageToTab(tabId, message).catch(error => {
+        console.warn("FocusFinder: Failed to send message to tab", tabId, "for:", error.message);
+        // If sending fails because the tab is gone, remove it from state.
+        if(error.message.includes("No tab with id") || error.message.includes("Receiving end does not exist")){
+            domainStates[domain]?.tabIds.delete(tabId);
+             if (domainStates[domain]?.tabIds.size === 0) {
+                console.log("FocusFinder: Deleting state for", domain, "- no tabs left after broadcast failure.");
+                delete domainStates[domain];
+            }
         }
-      } catch (cleanupError) {
-        console.error("FocusFinder: Error during cleanup after broadcast exception:", cleanupError);
-      }
-    }
+      })
+    );
   }
-  
-  try {
-    await Promise.all(promises);
-  } catch (error) {
-    console.error("FocusFinder: Error in Promise.all during broadcast:", error);
-  }
+  await Promise.all(promises);
 }
 
 async function sendMessageToTab(tabId, message) {
    try {
        // console.log(FocusFinder: Sending message to tab :, message);
-       return await browserAPI.tabs.sendMessage(tabId, message);
+       return await chrome.tabs.sendMessage(tabId, message);
    } catch (error) {
        // console.error(FocusFinder: Error sending message to tab :, error);
        // Rethrow specific errors if needed, or just log and continue
@@ -699,6 +666,7 @@ async function sendMessageToTab(tabId, message) {
 async function ensureContentScriptReady(tabId, callback) {
    console.log("FocusFinder: Ensuring content script ready for tab");
    try {
+       // Ping the content script to see if it's loaded and listening
        const response = await sendMessageToTab(tabId, { action: "ping" });
        if (response && response.status === 'ready') {
            console.log("FocusFinder: Content script ready in tab.");
@@ -725,7 +693,7 @@ async function ensureContentScriptReady(tabId, callback) {
 
 async function injectContentScript(tabId) {
    try {
-       await browserAPI.scripting.executeScript({
+       await chrome.scripting.executeScript({
            target: { tabId: tabId },
            files: ["contentScript.js"]
        });
@@ -738,31 +706,30 @@ async function injectContentScript(tabId) {
 
 async function requestIntention(domain, tabId) {
   await ensureContentScriptReady(tabId, () => {
-    console.log("FocusFinder: Sending showIntentionPrompt to tab for");
-    try {
-      // Send both default and user reasons
-      const allReasons = [...(settings.defaultReasons || []), ...(settings.userReasons || [])];
-      sendMessageToTab(tabId, {
-        action: "showIntentionPrompt",
-        domain: domain,
-        reasons: allReasons // Pass combined list
-      }).catch(error => console.error("FocusFinder: Error sending showIntentionPrompt to tab:", error));
-    } catch (error) {
-      console.error("FocusFinder: Exception sending showIntentionPrompt to tab:", error);
-    }
+    console.log(`FocusFinder: Sending showIntentionPrompt to tab ${tabId} for ${domain}`);
+
+    // Combine default and user reasons
+    const allReasons = [...(settings.defaultReasons || []), ...(settings.userReasons || [])];
+
+    sendMessageToTab(tabId, {
+      action: "showIntentionPrompt",
+      domain: domain,
+      reasons: allReasons // Send the combined list
+    }).catch(error => console.error("FocusFinder: Error sending showIntentionPrompt to tab:", tabId, error));
   });
 }
 
 async function handleIntentionSet(domain, intention, durationSeconds, tabId) {
   console.log("FocusFinder: Intention received for:", domain, "Duration:", durationSeconds, "s");
   if (!domainStates[domain]) {
-     // Initialize if somehow state wasn't partially created yet
-     domainStates[domain] = {
-        intention: "", intentionSet: false, timeSpent: 0, reminderTime: 300,
-        isTracking: false, isPaused: false, pauseReason: '', reminderShown: false,
-        blurTimeoutId: null, tabIds: new Set(), widgetExpanded: false, lastVisibilityState: true,
-        initialGracePeriodId: null, ignorePauseOnBlurUntil: null
-    };
+    // Should usually be partially initialized, but handle case where it's not
+    domainStates[domain] = {
+       intention: "", intentionSet: false, timeSpent: 0, reminderTime: 300,
+       isTracking: false, isPaused: false, pauseReason: '', reminderShown: false,
+       blurTimeoutId: null, tabIds: new Set(), widgetExpanded: false, lastVisibilityState: true,
+       initialGracePeriodId: null, ignorePauseOnBlurUntil: null,
+       widgetPosition: 'bottom-right' // Add default position here too
+   };
   }
   const state = domainStates[domain];
   state.intention = intention;
@@ -785,8 +752,8 @@ async function handleIntentionSet(domain, intention, durationSeconds, tabId) {
   }
 
   // NEW: Set immunity flag to ignore pauseOnBlur temporarily after intention set
-  state.ignorePauseOnBlurUntil = Date.now() + 2000; // Ignore pauseOnBlur for 2 seconds
-  console.log("FocusFinder: Setting pauseOnBlur immunity until", new Date(state.ignorePauseOnBlurUntil).toISOString());
+  state.ignorePauseOnBlurUntil = Date.now() + 2000; // 2 second immunity
+  console.log("FocusFinder: Setting pauseOnBlur immunity for manual resume:", domain);
   
   // Force a state update to ensure the timer is running
   updateDomainPauseState(domain, '');
@@ -801,48 +768,58 @@ async function handleIntentionSet(domain, intention, durationSeconds, tabId) {
   console.log("FocusFinder: Tracking started for", domain);
 }
 
-async function handleExtendTime(domain, minutes) {
-  if (!domainStates[domain] || !minutes) return;
-
+// Helper function specifically for applying the time extension
+async function applyExtension(domain, minutes) {
+  if (!domainStates[domain]) return;
   const state = domainStates[domain];
-  const secondsToAdd = parseInt(minutes) * 60;
-  state.reminderTime += secondsToAdd;
-  state.reminderShown = false; // Allow reminder again for the new time
-  state.isPaused = false; // Ensure resumed if paused due to time up
+  const extensionSeconds = minutes * 60;
+
+  state.reminderTime += extensionSeconds;
+  state.isTracking = true;
+  state.isPaused = false;
   state.pauseReason = '';
+  state.reminderShown = false;
+  state.hasExtended = true; // Always true when applying
 
-  console.log("FocusFinder: Extended time for", domain, "by", minutes, "m. New reminderTime:", state.reminderTime, "s");
+  console.log(`FocusFinder: Time extended for ${domain} by ${minutes}m. New limit: ${state.reminderTime}s`);
 
-  broadcastToDomainTabs(domain, {
+  await broadcastToDomainTabs(domain, {
     action: "timerExtended",
-    extensionMinutes: minutes,
-    newReminderTime: state.reminderTime
+    newReminderTime: state.reminderTime,
+    extensionMinutes: minutes
   });
+}
 
-  // Send immediate update
-   broadcastToDomainTabs(domain, {
-        action: "updateTimer",
-        timeSpent: state.timeSpent,
-        reminderTime: state.reminderTime,
-        isTimeUp: state.timeSpent >= state.reminderTime // Re-evaluate isTimeUp
-    });
+// Modify handleExtendTime to check the flag
+async function handleExtendTime(domain, minutes, force = false) {
+    if (!domainStates[domain]) return;
+    const state = domainStates[domain];
 
-  // Ensure tracking resumes if it was paused only due to time up
-  updateDomainPauseState(domain);
+    if (state.hasExtended && !force) {
+        // Already extended, request confirmation from content script
+        console.log(`FocusFinder: Requesting extend confirmation for ${domain}`);
+        await broadcastToDomainTabs(domain, {
+            action: "showExtendConfirmation",
+            minutes: minutes
+        });
+    } else {
+        // First extension or confirmation received (force=true)
+        await applyExtension(domain, minutes);
+    }
 }
 
 async function handleCloseTabsRequest(domain) {
-  if (!domainStates[domain]) return;
-  console.log("FocusFinder: Closing tabs for domain");
-
-  const tabsToClose = Array.from(domainStates[domain].tabIds); // Copy set before iterating/removing
-  for (const tabId of tabsToClose) {
-    try {
-      await browserAPI.tabs.remove(tabId);
+  if (!domainStates[domain] || !domainStates[domain].tabIds) return;
+  console.log("FocusFinder: Closing tabs for", domain);
+  const tabIdsToClose = Array.from(domainStates[domain].tabIds);
+  console.log("FocusFinder: Tab IDs to close:", tabIdsToClose);
+  try {
+    for (const tabId of tabIdsToClose) {
+      await chrome.tabs.remove(tabId);
       console.log("FocusFinder: Closed tab");
-    } catch (error) {
-      console.warn("FocusFinder: Failed to close tab", tabId, "(maybe already closed):", error.message);
     }
+  } catch (error) {
+    console.warn("FocusFinder: Failed to close tabs:", error.message);
   }
   // State will be cleaned up by tabRemovedHandler
 }
@@ -853,13 +830,6 @@ async function handleUpdateSettings(newSettings) {
   settings = { ...settings, ...newSettings }; // Merge new settings
   await saveSettings();
 
-  // Broadcast the updated settings to relevant content scripts
-  Object.keys(domainStates).forEach(domain => {
-    if (domainStates[domain] && domainStates[domain].tabIds.size > 0) {
-      broadcastToDomainTabs(domain, { action: "settingsUpdated", newSettings: settings });
-    }
-  });
-
   // If pauseOnBlur setting changed, re-evaluate pause states
   if (oldPauseOnBlur !== settings.pauseOnBlur) {
     updatePauseStateForAllDomains();
@@ -867,15 +837,14 @@ async function handleUpdateSettings(newSettings) {
   // If watchlist changed, potentially need to check current tabs again? Less critical.
 }
 
-async function handleToggleExtension(explicitState = null) {
-    const newState = typeof explicitState === 'boolean' ? explicitState : !settings.isExtensionEnabled;
-    if(settings.isExtensionEnabled !== newState){
-        settings.isExtensionEnabled = newState;
-        console.log("FocusFinder: Extension");
-        await saveSettings();
-        updatePauseStateForAllDomains(); // Update all domains based on new global status
-        // Optionally update browser action icon state here
-    }
+async function handleToggleExtension(enable) {
+    settings.isExtensionEnabled = enable;
+    await saveSettings();
+    console.log(`FocusFinder: Extension ${enable ? 'enabled' : 'disabled'}.`);
+    // Update pause state for all domains based on the new global setting
+    updatePauseStateForAllDomains();
+
+    // Optional: Could also broadcast this change to content scripts if they need to react
 }
 
 
@@ -893,13 +862,16 @@ async function initializeWidgetForTab(tabId, domain) {
 // --- Utilities ---
 function extractDomain(url) {
   try {
-    if (!url || typeof url !== 'string' || url.startsWith('chrome://') || url.startsWith('about:') || url.startsWith('chrome-extension://') || url.startsWith('file://')) {
+    if (!url || typeof url !== 'string') return ""; // Basic check
+
+    // Ignore chrome://, about:, file:, etc.
+    if (url.startsWith('chrome:') || url.startsWith('about:') || url.startsWith('file:')) {
       return "";
     }
     
     let hostname = new URL(url).hostname;
     
-    // Remove www. prefix if present
+    // Remove common prefixes like www.
     if (hostname.startsWith('www.')) {
       hostname = hostname.slice(4);
     }
@@ -955,18 +927,16 @@ async function isDomainWatched(domain) {
 
 // Listen for changes in storage and update local settings
 function storageChangeHandler(changes, areaName) {
-  // Only process changes from local storage
   if (areaName === 'local' && changes.settings) {
-    console.log("FocusFinder: Detected settings change in local storage");
-    const oldPauseOnBlur = settings.pauseOnBlur;
-    const oldIsEnabled = settings.isExtensionEnabled;
+    console.log("FocusFinder: Detected settings change in storage.");
+    const newSettingsData = changes.settings.newValue;
+    if (!newSettingsData) return; // Should not happen, but check
 
-    settings = { ...defaultSettings, ...changes.settings.newValue };
-    settings.watchlist = Array.isArray(settings.watchlist) ? settings.watchlist : defaultSettings.watchlist;
-    settings.defaultReasons = Array.isArray(settings.defaultReasons) ? settings.defaultReasons : defaultSettings.defaultReasons;
-    settings.userReasons = Array.isArray(settings.userReasons) ? settings.userReasons : defaultSettings.userReasons;
+    // Update the in-memory settings
+    settings = { ...defaultSettings, ...newSettingsData };
 
-    console.log("FocusFinder: In-memory settings updated:", settings);
+    // TODO: Potentially broadcast changes to content scripts if they need live updates
+    // Currently, popup reload handles most UI updates based on settings
 
     // Re-evaluate pause state if relevant settings changed
     if (oldPauseOnBlur !== settings.pauseOnBlur || oldIsEnabled !== settings.isExtensionEnabled) {
