@@ -741,7 +741,7 @@ if (window.focusFinderContentScriptLoaded) {
       chrome.runtime.sendMessage({
           action: "visibilityChanged",
           domain: currentDomain,
-          tabId: null, // Content script doesn't know its tab ID, background script uses sender.tab.id
+          // No tabId needed here, background script uses sender.tab.id
           isVisible: document.visibilityState === 'visible'
       }).catch(error => console.error("FocusFinder Content Script: Error in visibility change:", error));
   }
