@@ -30,6 +30,12 @@ const STORAGE_VERSION = 2; // Update version number as we make significant chang
 const STATE_SAVE_INTERVAL_MS = 30000;
 // Save timer ID
 let stateSaveIntervalId = null;
+// Custom timer interval ID
+let customTimerIntervalId = null;
+// Timer precision interval in ms (100ms for smoother updates)
+const TIMER_PRECISION_MS = 100;
+// Timer counter for aggregating time
+let timerCounter = 0;
 
 // --- Debouncing State ---
 let focusChangeTimeoutId = null;
@@ -45,6 +51,15 @@ initializeExtension(); // Initialize on script load (e.g., after update)
 // which is why we also have periodic saving
 self.addEventListener('beforeunload', () => {
   console.log("FocusFinder: Browser is closing, saving final state...");
+  // Clean up timers
+  if (customTimerIntervalId !== null) {
+    clearInterval(customTimerIntervalId);
+    customTimerIntervalId = null;
+  }
+  if (stateSaveIntervalId !== null) {
+    clearInterval(stateSaveIntervalId);
+    stateSaveIntervalId = null;
+  }
   saveDomainStates();
   saveSettings();
 });
@@ -439,9 +454,26 @@ function setupListeners() {
 // Runs every second to check the active tab's domain state
 function createMainTimerAlarm() {
   console.log("FocusFinder: Creating main timer alarm.");
-  chrome.alarms.create(MAIN_TIMER_ALARM_NAME, {
-    periodInMinutes: 1 / 60 // Run every second
-  });
+  
+  // Clear any existing custom timer
+  if (customTimerIntervalId !== null) {
+    clearInterval(customTimerIntervalId);
+    customTimerIntervalId = null;
+  }
+  
+  // Use a more precise timer implementation instead of chrome.alarms
+  // The 100ms precision helps prevent timer drift and ensures more reliable updates
+  customTimerIntervalId = setInterval(() => {
+    timerCounter += TIMER_PRECISION_MS;
+    
+    // Execute the main timer logic every second
+    if (timerCounter >= 1000) {
+      timerCounter = 0;
+      mainTimerAlarmHandler({ name: MAIN_TIMER_ALARM_NAME });
+    }
+  }, TIMER_PRECISION_MS);
+  
+  console.log("FocusFinder: Created high-precision timer with interval:", TIMER_PRECISION_MS, "ms");
 }
 
 function mainTimerAlarmHandler(alarm) {
@@ -1218,6 +1250,9 @@ async function handleIntentionSet(domain, intention, durationSeconds, tabId) {
     reminderTime: state.reminderTime
   });
   
+  // Reset timer state to ensure clean tracking
+  resetTimerState();
+  
   console.log("FocusFinder: Tracking started for", domain);
 }
 
@@ -1452,6 +1487,13 @@ function storageChangeHandler(changes, areaName) {
 }
 
 async function handleTimer() {
+  // This function is now superseded by the custom timer implementation
+  // and is kept for compatibility only
+  console.log("FocusFinder: handleTimer called, but using custom timer implementation instead");
+  return;
+  
+  // Old implementation below (not executed)
+  /*
   for (const domain in domainStates) {
     if (domainStates[domain].isTracking && !domainStates[domain].isPaused) {
       domainStates[domain].timeSpent += 1; // Increment by 1 second
@@ -1483,6 +1525,7 @@ async function handleTimer() {
       }
     }
   }
+  */
 }
 
 /**
@@ -1509,4 +1552,22 @@ async function checkCurrentActiveTab() {
   } catch (error) {
     console.error("FocusFinder: Error checking current active tab:", error);
   }
+}
+
+// --- Timer Management ---
+// Add this after createMainTimerAlarm function
+function resetTimerState() {
+  console.log("FocusFinder: Resetting timer state");
+  
+  // Stop existing timer if any
+  if (customTimerIntervalId !== null) {
+    clearInterval(customTimerIntervalId);
+    customTimerIntervalId = null;
+  }
+  
+  // Reset counter
+  timerCounter = 0;
+  
+  // Restart timer with clean state
+  createMainTimerAlarm();
 }
