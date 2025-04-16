@@ -15,6 +15,38 @@ const defaultSettings = {
   domainStates: {}
 };
 
+// --- Service Worker Persistence ---
+// Keep service worker alive with periodic alarms
+// This helps prevent Chrome from suspending the service worker after inactivity
+try {
+  // Create a persistent alarm that fires every 30 seconds
+  chrome.alarms.create('keepAlive', { periodInMinutes: 0.5 });
+  
+  // Also register for idle state changes which can help wake up the service worker
+  if (chrome.idle) {
+    chrome.idle.setDetectionInterval(30);
+    chrome.idle.onStateChanged.addListener((state) => {
+      console.log("FocusFinder: System idle state changed to", state);
+      // When returning from idle, check active domain state
+      if (state === "active" && activeDomain) {
+        updateDomainPauseState(activeDomain);
+      }
+    });
+  }
+  
+  console.log("FocusFinder: Service worker persistence mechanisms initialized");
+} catch (e) {
+  console.error("FocusFinder: Error setting up service worker persistence:", e);
+}
+
+// Add a listener for the keep-alive alarm
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === 'keepAlive') {
+    // Just log the ping to keep the service worker alive
+    console.log("FocusFinder: Service worker keep-alive ping");
+  }
+});
+
 // --- State Variables ---
 let domainStates = {}; // In-memory state
 let settings = { ...defaultSettings };
@@ -457,23 +489,57 @@ function createMainTimerAlarm() {
   
   // Clear any existing custom timer
   if (customTimerIntervalId !== null) {
-    clearInterval(customTimerIntervalId);
+    try {
+      clearInterval(customTimerIntervalId);
+    } catch (e) {
+      console.error("FocusFinder: Error clearing existing timer:", e);
+    }
     customTimerIntervalId = null;
   }
   
-  // Use a more precise timer implementation instead of chrome.alarms
-  // The 100ms precision helps prevent timer drift and ensures more reliable updates
-  customTimerIntervalId = setInterval(() => {
-    timerCounter += TIMER_PRECISION_MS;
+  try {
+    // Use a more precise timer implementation instead of chrome.alarms
+    // The 100ms precision helps prevent timer drift and ensures more reliable updates
+    customTimerIntervalId = setInterval(() => {
+      try {
+        timerCounter += TIMER_PRECISION_MS;
+        
+        // Execute the main timer logic every second
+        if (timerCounter >= 1000) {
+          // Log timer execution with timestamp for diagnostics
+          const now = Date.now();
+          if (!self.lastTimerExecution) {
+            self.lastTimerExecution = now;
+          } else {
+            const timeDiff = now - self.lastTimerExecution;
+            if (timeDiff > 1200) {
+              console.warn(`FocusFinder: Timer interval delay detected: ${timeDiff}ms between executions`);
+            }
+            self.lastTimerExecution = now;
+          }
+          
+          timerCounter = 0;
+          
+          // Execute timer handler in try/catch to ensure one error doesn't break the timer
+          try {
+            mainTimerAlarmHandler({ name: MAIN_TIMER_ALARM_NAME });
+          } catch (handlerError) {
+            console.error("FocusFinder: Error in timer handler:", handlerError);
+          }
+        }
+      } catch (e) {
+        console.error("FocusFinder: Error in timer interval callback:", e);
+      }
+    }, TIMER_PRECISION_MS);
     
-    // Execute the main timer logic every second
-    if (timerCounter >= 1000) {
-      timerCounter = 0;
-      mainTimerAlarmHandler({ name: MAIN_TIMER_ALARM_NAME });
-    }
-  }, TIMER_PRECISION_MS);
-  
-  console.log("FocusFinder: Created high-precision timer with interval:", TIMER_PRECISION_MS, "ms");
+    console.log("FocusFinder: Created high-precision timer with interval:", TIMER_PRECISION_MS, "ms");
+  } catch (e) {
+    console.error("FocusFinder: Failed to create custom timer, falling back to Chrome alarms:", e);
+    // Fall back to Chrome's alarm API if setInterval fails
+    chrome.alarms.create(MAIN_TIMER_ALARM_NAME, {
+      periodInMinutes: 1 / 60 // Run every second
+    });
+  }
 }
 
 function mainTimerAlarmHandler(alarm) {
@@ -1567,7 +1633,38 @@ function resetTimerState() {
   
   // Reset counter
   timerCounter = 0;
+  self.lastTimerExecution = null;
+  self.timerFallbackCounter = 0;
   
   // Restart timer with clean state
   createMainTimerAlarm();
+  
+  // Set up fallback alarm in case the custom timer fails
+  // This ensures we have a backup mechanism for timer updates
+  chrome.alarms.create('timerFallback', { periodInMinutes: 1 });
 }
+
+// Add a listener for the fallback alarm
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === 'timerFallback') {
+    // Check if our custom timer is working properly
+    const now = Date.now();
+    if (self.lastTimerExecution && (now - self.lastTimerExecution > 3000)) {
+      // If more than 3 seconds since last timer execution, our custom timer might be failing
+      console.warn("FocusFinder: Custom timer appears to be delayed, using fallback");
+      self.timerFallbackCounter = (self.timerFallbackCounter || 0) + 1;
+      
+      // Execute the timer handler directly
+      mainTimerAlarmHandler({ name: MAIN_TIMER_ALARM_NAME });
+      
+      // If fallback is consistently needed, restart the timer system
+      if (self.timerFallbackCounter > 3) {
+        console.warn("FocusFinder: Multiple timer failures detected, resetting timer system");
+        resetTimerState();
+      }
+    } else {
+      // Custom timer is working fine, reset the fallback counter
+      self.timerFallbackCounter = 0;
+    }
+  }
+});
