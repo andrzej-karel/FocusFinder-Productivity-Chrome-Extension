@@ -1,20 +1,23 @@
 ﻿{
   "manifest_version": 3,
   "name": "FocusFinder Widget: Browse, For A Reason",
-  "version": "1.1.17",
+  "version": "1.1.18",
   "description": "Answer: Why are you visiting this site? → this goal remains visible alongside a timer, reminding you to stay mindful and productive.",
   "permissions": [
     "storage",
     "tabs",
     "alarms",
     "scripting",
-    "windows"
+    "windows",
+    "idle"
   ],
   "host_permissions": [
     "<all_urls>"
   ],
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "background.js",
+    "type": "module",
+    "persistence": true
   },
   "content_scripts": [
     {

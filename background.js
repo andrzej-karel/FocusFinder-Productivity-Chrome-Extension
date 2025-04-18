@@ -15,6 +15,38 @@ const defaultSettings = {
   domainStates: {}
 };
 
+// --- Service Worker Persistence ---
+// Keep service worker alive with periodic alarms
+// This helps prevent Chrome from suspending the service worker after inactivity
+try {
+  // Create a persistent alarm that fires every 30 seconds
+  chrome.alarms.create('keepAlive', { periodInMinutes: 0.5 });
+  
+  // Also register for idle state changes which can help wake up the service worker
+  if (chrome.idle) {
+    chrome.idle.setDetectionInterval(30);
+    chrome.idle.onStateChanged.addListener((state) => {
+      console.log("FocusFinder: System idle state changed to", state);
+      // When returning from idle, check active domain state
+      if (state === "active" && activeDomain) {
+        updateDomainPauseState(activeDomain);
+      }
+    });
+  }
+  
+  console.log("FocusFinder: Service worker persistence mechanisms initialized");
+} catch (e) {
+  console.error("FocusFinder: Error setting up service worker persistence:", e);
+}
+
+// Add a listener for the keep-alive alarm
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === 'keepAlive') {
+    // Just log the ping to keep the service worker alive
+    console.log("FocusFinder: Service worker keep-alive ping");
+  }
+});
+
 // --- State Variables ---
 let domainStates = {}; // In-memory state
 let settings = { ...defaultSettings };
@@ -30,6 +62,12 @@ const STORAGE_VERSION = 2; // Update version number as we make significant chang
 const STATE_SAVE_INTERVAL_MS = 30000;
 // Save timer ID
 let stateSaveIntervalId = null;
+// Custom timer interval ID
+let customTimerIntervalId = null;
+// Timer precision interval in ms (100ms for smoother updates)
+const TIMER_PRECISION_MS = 100;
+// Timer counter for aggregating time
+let timerCounter = 0;
 
 // --- Debouncing State ---
 let focusChangeTimeoutId = null;
@@ -45,6 +83,15 @@ initializeExtension(); // Initialize on script load (e.g., after update)
 // which is why we also have periodic saving
 self.addEventListener('beforeunload', () => {
   console.log("FocusFinder: Browser is closing, saving final state...");
+  // Clean up timers
+  if (customTimerIntervalId !== null) {
+    clearInterval(customTimerIntervalId);
+    customTimerIntervalId = null;
+  }
+  if (stateSaveIntervalId !== null) {
+    clearInterval(stateSaveIntervalId);
+    stateSaveIntervalId = null;
+  }
   saveDomainStates();
   saveSettings();
 });
@@ -57,6 +104,9 @@ async function initializeExtension() {
   
   // Then load domain states (which includes verifying active tabs)
   await loadDomainStates();
+  
+  // Clean up any invalid tab IDs that might have been loaded from storage
+  cleanInvalidTabIds();
   
   // Set up listeners and timers
   setupListeners();
@@ -240,15 +290,20 @@ async function verifyActiveTabsAfterRecovery() {
       if (tab.url) {
         const domain = extractDomain(tab.url);
         if (domain && domainStates[domain]) {
-          // Add tab to the domain's tab list
-          domainStates[domain].tabIds.add(tab.id);
-          console.log(`FocusFinder: Added existing tab ${tab.id} for domain ${domain}`);
-          
-          // If tab is active, set as active domain
-          if (tab.active && tab.windowId === chrome.windows.WINDOW_ID_CURRENT) {
-            activeTabId = tab.id;
-            activeDomain = domain;
-            console.log(`FocusFinder: Set active domain to ${domain} (tab ${tab.id})`);
+          // Validate tab ID before adding
+          if (validateTabId(tab.id)) {
+            // Add tab to the domain's tab list
+            domainStates[domain].tabIds.add(tab.id);
+            console.log(`FocusFinder: Added existing tab ${tab.id} for domain ${domain}`);
+            
+            // If tab is active, set as active domain
+            if (tab.active && tab.windowId === chrome.windows.WINDOW_ID_CURRENT) {
+              activeTabId = tab.id;
+              activeDomain = domain;
+              console.log(`FocusFinder: Set active domain to ${domain} (tab ${tab.id})`);
+            }
+          } else {
+            console.warn(`FocusFinder: Skipping invalid tab ID ${tab.id} during recovery for domain ${domain}`);
           }
         }
       }
@@ -391,6 +446,51 @@ function setupPeriodicStateSaving() {
   console.log(`FocusFinder: Periodic state saving set up (every ${STATE_SAVE_INTERVAL_MS / 1000}s)`);
 }
 
+/**
+ * Periodically clean up tab IDs to prevent invalid IDs from accumulating
+ */
+function cleanInvalidTabIds() {
+  let cleanupCount = 0;
+  
+  // Go through all domain states and clean up their tabIds Sets
+  Object.keys(domainStates).forEach(domain => {
+    if (!domainStates[domain].tabIds) return;
+    
+    const invalidIds = [];
+    
+    // Find all invalid IDs
+    for (const tabId of domainStates[domain].tabIds) {
+      if (!validateTabId(tabId)) {
+        invalidIds.push(tabId);
+      }
+    }
+    
+    // Remove invalid IDs
+    if (invalidIds.length > 0) {
+      console.log(`FocusFinder: Cleaning up ${invalidIds.length} invalid tabIds for domain ${domain}`);
+      invalidIds.forEach(id => {
+        domainStates[domain].tabIds.delete(id);
+        cleanupCount++;
+      });
+      
+      // If no valid tabs left, remove the domain state
+      if (domainStates[domain].tabIds.size === 0) {
+        console.log(`FocusFinder: Removing domain ${domain} after tab cleanup - no valid tabs left`);
+        delete domainStates[domain];
+      }
+    }
+  });
+  
+  if (cleanupCount > 0) {
+    console.log(`FocusFinder: Cleaned up ${cleanupCount} invalid tab IDs across all domains`);
+    
+    // Save the cleaned state
+    saveDomainStates().catch(error => {
+      console.error("FocusFinder: Error saving domain states after tab ID cleanup:", error);
+    });
+  }
+}
+
 function onInstalledHandler(details) {
   if (details.reason === "install") {
     console.log("FocusFinder: First installation.");
@@ -433,15 +533,74 @@ function setupListeners() {
     saveDomainStates();
     saveSettings();
   });
+  
+  // Set up periodic tab cleanup (every 5 minutes)
+  chrome.alarms.create('tabIdCleanup', { periodInMinutes: 5 });
+  chrome.alarms.onAlarm.addListener((alarm) => {
+    if (alarm.name === 'tabIdCleanup') {
+      cleanInvalidTabIds();
+    }
+  });
 }
 
 // --- Main Timer ---
 // Runs every second to check the active tab's domain state
 function createMainTimerAlarm() {
   console.log("FocusFinder: Creating main timer alarm.");
-  chrome.alarms.create(MAIN_TIMER_ALARM_NAME, {
-    periodInMinutes: 1 / 60 // Run every second
-  });
+  
+  // Clear any existing custom timer
+  if (customTimerIntervalId !== null) {
+    try {
+      clearInterval(customTimerIntervalId);
+    } catch (e) {
+      console.error("FocusFinder: Error clearing existing timer:", e);
+    }
+    customTimerIntervalId = null;
+  }
+  
+  try {
+    // Use a more precise timer implementation instead of chrome.alarms
+    // The 100ms precision helps prevent timer drift and ensures more reliable updates
+    customTimerIntervalId = setInterval(() => {
+      try {
+        timerCounter += TIMER_PRECISION_MS;
+        
+        // Execute the main timer logic every second
+        if (timerCounter >= 1000) {
+          // Log timer execution with timestamp for diagnostics
+          const now = Date.now();
+          if (!self.lastTimerExecution) {
+            self.lastTimerExecution = now;
+          } else {
+            const timeDiff = now - self.lastTimerExecution;
+            if (timeDiff > 1200) {
+              console.warn(`FocusFinder: Timer interval delay detected: ${timeDiff}ms between executions`);
+            }
+            self.lastTimerExecution = now;
+          }
+          
+          timerCounter = 0;
+          
+          // Execute timer handler in try/catch to ensure one error doesn't break the timer
+          try {
+            mainTimerAlarmHandler({ name: MAIN_TIMER_ALARM_NAME });
+          } catch (handlerError) {
+            console.error("FocusFinder: Error in timer handler:", handlerError);
+          }
+        }
+      } catch (e) {
+        console.error("FocusFinder: Error in timer interval callback:", e);
+      }
+    }, TIMER_PRECISION_MS);
+    
+    console.log("FocusFinder: Created high-precision timer with interval:", TIMER_PRECISION_MS, "ms");
+  } catch (e) {
+    console.error("FocusFinder: Failed to create custom timer, falling back to Chrome alarms:", e);
+    // Fall back to Chrome's alarm API if setInterval fails
+    chrome.alarms.create(MAIN_TIMER_ALARM_NAME, {
+      periodInMinutes: 1 / 60 // Run every second
+    });
+  }
 }
 
 function mainTimerAlarmHandler(alarm) {
@@ -623,6 +782,12 @@ function updateDomainPauseState(domain, reasonOverride = null) {
 
 // --- Tab Management ---
 async function tabUpdatedHandler(tabId, changeInfo, tab) {
+    // Skip invalid tab IDs immediately
+    if (!validateTabId(tabId)) {
+        console.warn(`FocusFinder: Received update event for invalid tabId: ${tabId}, skipping`);
+        return;
+    }
+    
     // Check primarily for URL changes on complete load or explicit URL change info
     if (tab.url && (changeInfo.status === 'complete' || changeInfo.url)) {
         const domain = extractDomain(tab.url);
@@ -674,9 +839,11 @@ async function tabUpdatedHandler(tabId, changeInfo, tab) {
                  activeTabId = tabId;
              }
         }
-         // Clean up tabIds for domains that might have lost this tab
-         let domainsChanged = false;
-         Object.keys(domainStates).forEach(d => {
+        
+        // Clean up tabIds for domains that might have lost this tab
+        // This needed when a tab navigates from one tracked domain to another
+        let domainsChanged = false;
+        Object.keys(domainStates).forEach(d => {
             if(d !== domain && domainStates[d].tabIds.has(tabId)) {
                 domainStates[d].tabIds.delete(tabId);
                 domainsChanged = true;
@@ -685,17 +852,24 @@ async function tabUpdatedHandler(tabId, changeInfo, tab) {
                     delete domainStates[d];
                  }
             }
-         });
+        });
          
-         // Save domain states if any changes occurred
-         if (domainsChanged) {
-             await saveDomainStates();
-         }
+        // Save domain states if any changes occurred
+        if (domainsChanged) {
+            await saveDomainStates();
+        }
     }
 }
 
 async function tabActivatedHandler(activeInfo) {
   const { tabId } = activeInfo;
+  
+  // Validate tab ID first
+  if (!validateTabId(tabId)) {
+    console.warn(`FocusFinder: Received activation event for invalid tabId: ${tabId}, skipping`);
+    return;
+  }
+  
   console.log("FocusFinder: Tab activated:", tabId);
 
   try {
@@ -757,6 +931,12 @@ async function tabActivatedHandler(activeInfo) {
 }
 
 function tabRemovedHandler(tabId, removeInfo) {
+  // Validate tab ID first
+  if (!validateTabId(tabId)) {
+    console.warn(`FocusFinder: Received removal event for invalid tabId: ${tabId}, skipping`);
+    return;
+  }
+  
   console.log("FocusFinder: Tab removed:", tabId);
   let domainNeedingUpdate = null;
   let domainsChanged = new Set();
@@ -876,15 +1056,20 @@ async function checkDomainStatus(tabId, url) {
                 pauseReason: 'noIntention',
                 reminderShown: false,
                 blurTimeoutId: null,
-                tabIds: new Set([tabId]), // Start fresh with just this tab
+                tabIds: new Set(), // Start fresh with just this tab
                 widgetExpanded: false,
                 lastVisibilityState: true,
                 initialGracePeriodId: null,
                 ignorePauseOnBlurUntil: null,
-                widgetPosition: widgetPosition,
+                widgetPosition: widgetPosition, // Preserve position preference
                 hasExtended: false,
                 lastUpdated: Date.now()
             };
+            
+            // Validate tabId before adding it to the set
+            if (validateTabId(tabId)) {
+                domainStates[domain].tabIds.add(tabId);
+            }
             
             // Save new domain state immediately
             await updateAndSaveDomainState(domain);
@@ -894,7 +1079,11 @@ async function checkDomainStatus(tabId, url) {
     } else if (isRecoveredDomain) {
         // This is a domain recovered from storage but we need to verify intention
         console.log("FocusFinder: Recovered domain from previous session. Requesting intention confirmation.");
-        domainStates[domain].tabIds.add(tabId); // Add this tab to the domain
+        
+        // Validate tabId before adding it to the set
+        if (validateTabId(tabId)) {
+            domainStates[domain].tabIds.add(tabId); // Add this tab to the domain
+        }
         
         // Request intention for recovered domain
         await requestIntention(domain, tabId);
@@ -908,7 +1097,10 @@ async function checkDomainStatus(tabId, url) {
         await updateAndSaveDomainState(domain);
     } else {
         // Domain state exists and is active
-        domainStates[domain].tabIds.add(tabId); // Ensure tab is tracked
+        // Validate tabId before adding it to the set
+        if (validateTabId(tabId)) {
+            domainStates[domain].tabIds.add(tabId); // Ensure tab is tracked
+        }
 
         if (domainStates[domain].intentionSet && settings.isExtensionEnabled) {
             console.log("FocusFinder: Domain has intention. Initializing widget for tab.");
@@ -1071,15 +1263,39 @@ async function broadcastToDomainTabs(domain, message) {
     return;
   }
 
-  console.log("FocusFinder: Broadcasting to", domainStates[domain].tabIds.size, "tabs for:", message);
-  const promises = [];
+  // First, ensure there are no invalid tab IDs in the set
+  let validTabsCount = 0;
+  const invalidTabIds = [];
+  
+  // Identify any invalid tabIds first before we iterate
   for (const tabId of domainStates[domain].tabIds) {
-    // Explicitly skip null or undefined tab IDs
-    if (tabId === null || tabId === undefined) {
-        console.warn(`FocusFinder: Skipping broadcast to invalid tabId: ${tabId} for domain ${domain}`);
-        continue; 
+    if (!validateTabId(tabId)) {
+      invalidTabIds.push(tabId);
+    } else {
+      validTabsCount++;
+    }
+  }
+  
+  // Clean up any invalid tabIds
+  if (invalidTabIds.length > 0) {
+    console.log(`FocusFinder: Removing ${invalidTabIds.length} invalid tabIds from domain ${domain}`);
+    for (const invalidId of invalidTabIds) {
+      domainStates[domain].tabIds.delete(invalidId);
     }
     
+    // If we removed all tabs, might need to delete the domain state
+    if (domainStates[domain].tabIds.size === 0) {
+      console.log(`FocusFinder: No valid tabs left for ${domain} after cleanup. Deleting state.`);
+      delete domainStates[domain];
+      return; // Exit since we deleted the domain state
+    }
+  }
+
+  console.log("FocusFinder: Broadcasting to", validTabsCount, "tabs for:", message);
+  const promises = [];
+  
+  for (const tabId of domainStates[domain].tabIds) {
+    // No need to check again, we just cleaned the set
     promises.push(
       sendMessageToTab(tabId, message).catch(error => {
         // Log the error regardless of type
@@ -1193,7 +1409,12 @@ async function handleIntentionSet(domain, intention, durationSeconds, tabId) {
   state.isPaused = false;
   state.pauseReason = '';
   
-  state.tabIds.add(tabId); // Ensure current tab is tracked
+  // Validate tabId before adding it to the set
+  if (validateTabId(tabId)) {
+    state.tabIds.add(tabId); // Ensure current tab is tracked
+  } else {
+    console.warn(`FocusFinder: Tried to add invalid tabId: ${tabId} for domain: ${domain}`);
+  }
 
   // Clear any existing initial grace period
   if (state.initialGracePeriodId) {
@@ -1217,6 +1438,9 @@ async function handleIntentionSet(domain, intention, durationSeconds, tabId) {
     intention: state.intention,
     reminderTime: state.reminderTime
   });
+  
+  // Reset timer state to ensure clean tracking
+  resetTimerState();
   
   console.log("FocusFinder: Tracking started for", domain);
 }
@@ -1452,6 +1676,13 @@ function storageChangeHandler(changes, areaName) {
 }
 
 async function handleTimer() {
+  // This function is now superseded by the custom timer implementation
+  // and is kept for compatibility only
+  console.log("FocusFinder: handleTimer called, but using custom timer implementation instead");
+  return;
+  
+  // Old implementation below (not executed)
+  /*
   for (const domain in domainStates) {
     if (domainStates[domain].isTracking && !domainStates[domain].isPaused) {
       domainStates[domain].timeSpent += 1; // Increment by 1 second
@@ -1483,6 +1714,7 @@ async function handleTimer() {
       }
     }
   }
+  */
 }
 
 /**
@@ -1509,4 +1741,58 @@ async function checkCurrentActiveTab() {
   } catch (error) {
     console.error("FocusFinder: Error checking current active tab:", error);
   }
+}
+
+// --- Timer Management ---
+// Add this after createMainTimerAlarm function
+function resetTimerState() {
+  console.log("FocusFinder: Resetting timer state");
+  
+  // Stop existing timer if any
+  if (customTimerIntervalId !== null) {
+    clearInterval(customTimerIntervalId);
+    customTimerIntervalId = null;
+  }
+  
+  // Reset counter
+  timerCounter = 0;
+  self.lastTimerExecution = null;
+  self.timerFallbackCounter = 0;
+  
+  // Restart timer with clean state
+  createMainTimerAlarm();
+  
+  // Set up fallback alarm in case the custom timer fails
+  // This ensures we have a backup mechanism for timer updates
+  chrome.alarms.create('timerFallback', { periodInMinutes: 1 });
+}
+
+// Add a listener for the fallback alarm
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === 'timerFallback') {
+    // Check if our custom timer is working properly
+    const now = Date.now();
+    if (self.lastTimerExecution && (now - self.lastTimerExecution > 3000)) {
+      // If more than 3 seconds since last timer execution, our custom timer might be failing
+      console.warn("FocusFinder: Custom timer appears to be delayed, using fallback");
+      self.timerFallbackCounter = (self.timerFallbackCounter || 0) + 1;
+      
+      // Execute the timer handler directly
+      mainTimerAlarmHandler({ name: MAIN_TIMER_ALARM_NAME });
+      
+      // If fallback is consistently needed, restart the timer system
+      if (self.timerFallbackCounter > 3) {
+        console.warn("FocusFinder: Multiple timer failures detected, resetting timer system");
+        resetTimerState();
+      }
+    } else {
+      // Custom timer is working fine, reset the fallback counter
+      self.timerFallbackCounter = 0;
+    }
+  }
+});
+
+// Add this after extractDomain function, around line ~1415
+function validateTabId(tabId) {
+  return tabId !== undefined && tabId !== null && Number.isInteger(tabId) && tabId > 0;
 }
